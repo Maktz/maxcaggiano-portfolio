@@ -1,0 +1,11 @@
+node_modules
+dist
+
+# Configurazione locale: contiene i parametri di Sanity per questo ambiente.
+.env.local
+.env*.local
+
+# Cache incrementali di TypeScript
+*.tsbuildinfo
+
+.DS_Store

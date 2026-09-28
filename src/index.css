@@ -1,0 +1,290 @@
+
+@font-face {
+  font-family: Clab;
+  src: url("/fonts/Clab-Hairline.woff2") format("woff2");
+  font-weight: 100;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: Clab;
+  src: url("/fonts/Clab-Thin.woff2") format("woff2");
+  font-weight: 200;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: Clab;
+  src: url("/fonts/Clab-Light.woff2") format("woff2");
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: Clab;
+  src: url("/fonts/Clab-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: Clab;
+  src: url("/fonts/Clab-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: Clab;
+  src: url("/fonts/Clab-SemiBold.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: Clab;
+  src: url("/fonts/Clab-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: Clab;
+  src: url("/fonts/Clab-ExtraBold.woff2") format("woff2");
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: Clab;
+  src: url("/fonts/Clab-Black.woff2") format("woff2");
+  font-weight: 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* Niente scroll-snap: con Lenis lo snap CSS fights con l'inerzia (il browser
+       riaggancia la posizione e l'animazione si spezza). Lo scroll è libero e
+       fluido, e ogni scena è una funzione pura della posizione. */
+  }
+
+  /* ---------------------------------------------------------------------
+     PALETTE — unica sorgente di verità dei colori del progetto.
+     I valori sono tripleti RGB (spazi separati, senza virgole) per due motivi:
+     Tailwind li consuma come `rgb(var(--x) / <alpha-value>)`, così gli
+     opacity modifier (bg-pink/20) continuano a funzionare; e il Canvas può
+     ricostruire `rgb(r g b)` e le sue `rgba()` senza dipendere dal CSS.
+     Cambiando un esadecimale qui, si aggiornano TUTTI gli elementi di quel
+     colore: classi Tailwind, CSS, particelle della nebulosa e navicelle.
+     --------------------------------------------------------------------- */
+  :root {
+    /* IL FILO DELLA PAGINA. Telemetria in basso a sinistra, blocco geografico in
+       alto a destra e marchio dell'header in alto a sinistra sono tre elementi
+       che condividono UNA griglia sola, e questa e' la sua distanza dal bordo.
+       Nello screen di riferimento il filo e' a 140px su 2864, cioe' il 4,9%
+       della larghezza; prima era 24px fissi, poco piu' di un terzo.
+
+       Perche' una variabile e non tre numeri: i tre devono restare allineati, e
+       con i numeri scritti a mano il primo ritocco di uno romperebbe la
+       griglia senza che nulla lo segnali.
+
+       clamp e non un numero fisso: sotto ~490px il 4,9% scenderebbe sotto i
+       24px, e sopra i 1800px il filo diventerebbe un pozzo. Il marchio
+       dell'header, che lavora in px e non puo' fare clamp da solo, MISURA
+       questo valore dalla telemetria invece di ricalcolarlo. */
+    --page-gutter: clamp(24px, 4.9vw, 88px);
+
+    --color-canvas: 182 25 127;   /* #B6197F sfondo pagina, magenta */
+    --color-deep: 100 14 70;     /* #640E46 fondale scuro card/pulsanti */
+    --color-pink: 252 178 188;   /* #FCB2BC testo mono, hint, particelle */
+    --color-accent: 255 212 0;   /* #FFD400 tipografia display */
+    --color-violet: 112 59 217;  /* #703BD9 */
+    --color-orchid: 178 59 202;  /* #B23BCA */
+    --color-amber: 225 138 14;   /* #E18A0E */
+  }
+
+  body {
+    background-color: rgb(var(--color-canvas));
+    color: rgb(var(--color-pink));
+    font-family: 'Space Mono', monospace;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  ::selection {
+    background-color: rgb(var(--color-pink));
+    color: rgb(var(--color-canvas));
+  }
+
+  /* Scrollbar nativa visibile e accessibile: con Lenis lo scroll non è più
+     nasosto, quindi deve restare afferrabile col mouse e raggiungibile da
+     tastiera. Larghezza ridotta per non rubare spazio al layout. */
+  ::-webkit-scrollbar {
+    width: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: rgb(var(--color-deep));
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgb(var(--color-pink));
+    border: 2px solid rgb(var(--color-deep));
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgb(var(--color-pink));
+  }
+
+  /* Firefox */
+  html {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--color-pink)) rgb(var(--color-deep));
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: rgb(var(--color-pink));
+    opacity: 1;
+  }
+
+  /* Anello di focus dei pulsanti di trasmissione.
+     Una sola regola per il componente che li contiene entrambi (preloader e
+     form contatti): se il focus fosse definito sul tag, il pulsante del
+     preloader e quello del form avrebbero potuto divergere.
+
+     `:focus-visible` e non `:focus`: l'anello compare per la tastiera e resta
+     per il clic solo quando il browser lo ritiene utile. Il colore è il rosa
+     dei testi perché è l'unico che si stacca dal fondo magenta senza
+     introdurre un colore nuovo, e `outline-offset` stacca l'anello dal bordo
+     del pulsante senza spostare il layout. */
+  .transmission-button:focus-visible {
+    outline: 2px solid rgb(var(--color-pink));
+    outline-offset: 2px;
+  }
+
+  /* L'headline e' il punto di arrivo del focus a fine sequenza.
+
+     `:focus` e NON `:focus-visible`, al contrario del pulsante, e la differenza
+     e' il punto: li' il focus lo mette l'utente e l'anello serve a dirgli dove
+     e' arrivato con il Tab. Qui lo mette la PAGINA, insieme a `preventScroll`,
+     quindi lo schermo non si muove e senza anello l'utente non ha nessun
+     indizio che il focus sia cambiato: resterebbe fermo guardando un titolo
+     che ora e' "attivo" e non lo sembra. Un `:focus-visible` mostrerebbe
+     l'anello solo a chi e' arrivato con la tastiera, e lascerebbe senza
+     segnale tutti gli altri.
+
+     Stesso colore e stesso spessore del pulsante perche' e' la stessa pagina.
+     `outline` e non `border` perche' non sposta il layout, e sull'headline uno
+     spostamento di 2px cambierebbe la larghezza della colonna, che il Passo 4
+     ha appena stabilizzato a 0px. */
+  [data-scene='hero'] h2:focus {
+    outline: 2px solid rgb(var(--color-pink));
+    outline-offset: 6px;
+  }
+
+  /* I DUE STATI DELLO SCRAMBLE.
+     Il controller mette una classe per posizione e la toglie quando il
+     carattere e' scoperto: il cambio e' secco, senza dissolvenza, e il testo si
+     rivela per collisione di colori e non per una transizione.
+
+     Il simbolo e' il rosa del sito tenuto al 55%. Il testo risolto prende
+     `inherit`, cioe' il colore finale di dov'e' finito: giallo sull'headline,
+     rosa sulla sub-headline. Una sola regola per due destinazioni, e il simbolo
+     resta visibile su entrambe.
+
+     Sul colore del simbolo la scelta non e' "rosa" ma "rosa piu' tenue": sulla
+     sub-headline il testo risolto e' gia' swiss-pink, e un simbolo allo stesso
+     rosso pieno non avrebbe nessun contrasto — il reveal sarebbe invisibile
+     esattamente dove lo si voleva leggere. */
+  .scramble-symbol {
+    color: rgb(var(--color-pink) / 0.55);
+  }
+  .scramble-char {
+    color: inherit;
+  }
+}
+
+@layer utilities {
+  /* Geometria della Works: strip orizzontale di card verticali 3:4.
+     La larghezza della card è la leva della corsa orizzontale, il gap tiene il
+     respiro fra le card. Entrambe scalano con la viewport ma restano entro
+     limiti, così la striscia resta usabile sia su portatile che su schermo
+     largo. I due numeri non sono liberi: il passo fra slot è card + gap e
+     quello è la minima distanza che rende impossibile la sovrapposizione fra
+     card adiacenti. A 1440 (20.8vw = 299.5, 4.2vw = 60.5) il passo è 359.5px
+     e la composizione di tre card occupa 3×299.5 + 2×60 = 958px, lasciando il
+     vuoto che serve a far leggere la corsa come uno spazio e non come un muro.
+     L'altezza non è dichiarata: deriva dall'aspect 3:4 applicato alla card, così
+     non può mai sforare la scena. */
+  :root {
+    --works-card-w: clamp(260px, 20.8vw, 320px);
+    --works-gap: clamp(28px, 4.2vw, 60px);
+  }
+
+  /* Il vuoto che riempie lo spazio avanzato del flex: serve perché la scena
+     resti larga quanto la viewport (e non quanto lo strip), altrimenti il
+     prospettiva si sarebbe riferita a una scena larga 2500px e le card
+     apparirebbero decentrate rispetto al punto di fuga. */
+  .works-spacer {
+    flex: 1 0 auto;
+  }
+
+  /* Misura del titolo della card, legata alla LARGHEZZA DELLA CARD e non a un
+     breakpoint dello schermo.
+     KineticText compone il titolo lettera per lettera dentro un nowrap: il suo
+     min-content è quindi l'intera riga, e il titolo più lungo (CHROMATIC
+     PROTOCOL) misura 293px a 25.6px, cioè più dei 258px utili di una card da
+     300px. Su un flex item senza min-width:0 questo non fa traboccare il testo:
+     fa CRESCERE il item, e la card passerebbe a 335px, rompendo l'aspect 3:4 e
+     il passo di 360px fra gli slot da cui dipende tutta la corsa.
+     0.072 × card sta sotto la larghezza utile a ogni viewport (300 → 21.6px →
+     247px in 258px utili; 260 → 18.7px → 214px in 226px), quindi il titolo
+     entra a ogni larghezza e il contratto di 300px resta rispettato. */
+  .works-card-title {
+    font-size: calc(var(--works-card-w) * 0.072);
+  }
+
+  .grid-master {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 1rem;
+  }
+
+  @media (min-width: 768px) {
+    .grid-master {
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: 1.5rem;
+    }
+  }
+
+  .grid-wireframe {
+    border: 1px solid rgb(var(--color-pink) / 0.2);
+  }
+
+  /* Pulsazione dei suggerimenti di scroll ([SCORRI PER INIZIARE ↓],
+     [SCORRI PER DISSOLVERE ↓], [SCORRI ANCORA ↓]). È un'animazione CSS pura
+     che NON tocca l'opacità del testo (luce + micro-movimento): l'opacità
+     resta guidata solo dallo scroll sullo span esterno, così non esistono due
+     animazioni moltiplicate sulla stessa proprietà e nessun hint lampeggia.
+     La variazione è in opacity e NON in filter brightness: quest'ultimo su un
+     rosa come #FCB2BC satura il canale rosso e porta il testo a quasi BIANCO
+     al picco della pulsazione, perdendo il colore. */
+  @keyframes scroll-hint-pulse {
+    from { opacity: 0.55; transform: translateY(0); }
+    to { opacity: 1; transform: translateY(3px); }
+  }
+
+  .scroll-hint-pulse {
+    animation: scroll-hint-pulse 1.2s ease-in-out infinite alternate;
+    will-change: opacity, transform;
+  }
+}
