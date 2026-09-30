@@ -391,8 +391,24 @@ export default function ProjectsScene({
         const firstSlotX = slotCentersRef.current.find((slot) => slot)?.x;
         const lastSlotX = slotCentersRef.current[slotCentersRef.current.length - 1]?.x;
         const cardTotal = Math.max(1, slotCentersRef.current.length - 1);
+        // LA LARGHEZZA va letta da `offsetWidth`, NON da `getBoundingClientRect`.
+        //
+        // Il rect e' la larghezza VISIVA, cioe' quella dopo i transform: mentre la
+        // Works e' in transizione il render loop tiene le card nel ventaglio, con
+        // `scale(CARD_FAN_START_SCALE)` = 0.25, e il rect vale 408 × 0.25 = 102
+        // invece di 408. La misura alimentava quindi il proprio risultato: da 102
+        // nasceva `cardHeight = min(safeHeight, 102 × 1.5) = 153`, la card si
+        // accorciava, e la misura successiva la trovava piu' stretta ancora.
+        //
+        // Misurato in `vite preview` a 1512×780: la larghezza letta alternava
+        // 408 → 107 → 103 → 103px nelle varie chiamate, e `--works-card-h`
+        // restava a 155px invece dei 547px che la banda sicura dichiara. Da li le
+        // card a 408×155, cioe' schiacciate a un terzo con brief e CTA tagliati.
+        //
+        // `offsetWidth` e' la larghezza di LAYOUT: ignora i transform, ed e' quindi
+        // la grandezza che il contratto `flex: 0 0 var(--works-card-w)` fissa.
         const measuredCardWidth =
-          cardRefs.current[0]?.getBoundingClientRect().width ?? 0;
+          cardRefs.current[0]?.offsetWidth ?? 0;
         const cardHalf = measuredCardWidth / 2;
         // LA SAFE AREA VERTICALE, misurata dal DOM.
         //
@@ -412,7 +428,23 @@ export default function ProjectsScene({
         // `min` per il pavimento, così se un HUD è nascosto non si crea mai una
         // banda a rovescio.
         const safeGap = SAFE_AREA_GAP;
-        const viewportBox = scene.clientHeight;
+        // La banda sicura parte dalla VIEWPORT, non da `scene.clientHeight`.
+        //
+        // I tre HUD sono `position: fixed`, quindi i loro rect sono in coordinate
+        // di viewport: `bottom = 96` significa "96px dal bordo alto dello
+        // schermo", sempre. `scene.clientHeight` e' invece una misura del
+        // DOCUMENTO, che cambia con il layout della sezione e non ha nessun
+        // rapporto con la posizione degli HUD. Mescolare le due grandezze
+        // produceva una banda che dipendeva dall'ordinamento del layout, e in
+        // produzione — dove i font arrivano in un ordine diverso — la misura
+        // partiva da una banda falsata: `safeHeight` crollava e
+        // `--works-card-h` finiva a 155px invece dei 547px che la formula
+        // dichiara. Le card risultavano schiacciate con il contenuto tagliato
+        // sotto il KPI.
+        //
+        // Il riferimento e' la viewport perche' e' l'unico sistema in cui
+        // vivono i rect degli HUD: e' l'unica base con cui sono confrontabili.
+        const viewportBox = window.innerHeight;
         // La banda parte dalla viewport intera e si RESTRINGE per ogni HUD. Non
         // si prende `max(bottom)` e `min(top)` su tutti gli elementi insieme:
         // sotto md esiste solo l'header, e il suo `top` (0) verrebbe preso come
@@ -577,6 +609,41 @@ export default function ProjectsScene({
     measureSlots();
     const fontsReady = document.fonts?.ready;
     fontsReady?.then(measureSlots);
+
+    // GLI HUD SONO UNA DIPENDENZA DELLA MISURA, E FINORA NON ERANO OSSERVATI.
+    //
+    // `measureSlots` legge i rect di header, indicazione geografica e telemetria
+    // per costruire la banda sicura da cui nasce `--works-card-h`. Ma i suoi
+    // trigger erano solo tre: il mount, i font, e il resize della scena. Nessuno
+    // di questi copre il momento in cui gli HUD si ASSESTANO, che in produzione
+    // avviene dopo il primo paint e in un ordine diverso dal dev.
+    //
+    // Il risultato era una banda falsata, non un valore assente: la misura gira
+    // una volta sola con rect non ancora al loro posto e non torna piu'. Misurato
+    // in `vite preview`: `--works-card-h` restava a 155px a 1512x780, mentre la
+    // formula dichiarata a 547px — la card risultava 408x155 invece di
+    // 409x547, cioe' schiacciata a un terzo con il brief e la CTA tagliati.
+    // Basta un resize di 1px e il valore saliva a 547px: la formula era gia'
+    // corretta, mancava solo la sua convergence.
+    //
+    // Si osservano i TRE HUD e non la sezione per la stessa ragione per cui non si
+    // osserva la sezione: gli HUD sono `fixed` e non cambiano da soli, quindi non
+    // possono generare il loop di notifiche che si evita guardando gli elementi
+    // che il codice stesso modifica.
+    const hudNodes = [
+      document.querySelector<HTMLElement>('header'),
+      document.querySelector<HTMLElement>('[data-anchor="geo"]'),
+      document.querySelector<HTMLElement>('[data-anchor="telemetry"]'),
+    ].filter((node): node is HTMLElement => node !== null);
+    const hudObserver =
+      typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measureSlots) : null;
+    hudNodes.forEach((node) => hudObserver?.observe(node));
+
+    // Come ultimo richiamo, un frame dopo i font: `document.fonts.ready` puo'
+    // risolversi PRIMA che gli HUD siano al loro posto, e allora la misura fatta
+    // a quel punto resta quella falsata. Un secondo richiamo differito copre
+    // quella finestra senza dipendere da quale dei due eventi arriva per primo.
+    const settle = window.requestAnimationFrame(() => window.requestAnimationFrame(measureSlots));
     // Si osserva la SCENA, non la sezione: la sezione è l'elemento che
     // measureSlots appena ha RIDIMENSIONATO, e osservarla significherebbe
     // ricevere una notifica a ogni nostra modifica (loop). La scena è alta
@@ -590,6 +657,8 @@ export default function ProjectsScene({
     window.addEventListener('resize', measureSlots);
     return () => {
       resizeObserver?.disconnect();
+      hudObserver?.disconnect();
+      window.cancelAnimationFrame(settle);
       window.removeEventListener('resize', measureSlots);
     };
     // lenis è l'istanza unica del provider (creata nel useState initializer, non

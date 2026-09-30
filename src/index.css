@@ -255,7 +255,22 @@
       --works-gap: 5vw;
     }
   }
+}
 
+/* Le regole da qui in giu' sono CLASSI DI COMPONENTI, non utility: la
+   Works, la card «+», gli anelli di focus e lo scroll hint. Vanno in
+   `@layer components` e non in `@layer utilities`.
+
+   La ragione e' l'ordine di cascata: in `utilities`, un componente sta
+   SOPRA le utility che lo compongono, e puo' vincerle a parita' di
+   specificita'. In `components` sta sotto, ed e' il posto in cui un
+   componente deve stare perche' le utility devono poterlo sovrascrivere.
+
+   Il blocco `@layer utilities` aperto piu' sopra non era mai stato
+   chiuso: inghiottiva queste 250 righe fin in fondo al file. In dev la
+   differenza non si vedeva, in build l'ordine dei layer decideva quale
+   regole applicare, e la Works ne risentiva. */
+@layer components {
   /* Il vuoto che riempie lo spazio avanzato del flex: serve perché la scena
      resti larga quanto la viewport (e non quanto lo strip), altrimenti il
      prospettiva si sarebbe riferita a una scena larga 2500px e le card
