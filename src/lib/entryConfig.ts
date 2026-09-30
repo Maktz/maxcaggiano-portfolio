@@ -109,10 +109,12 @@ export const ENTRY_CONFIG = {
   },
 
   // -- L'INGRESSO DELL'AVATAR ----------------------------------------------
-  // Parte mentre la riga 1 dell'headline si sta ancora risolvendo: l'avatar
-  // entra sotto gli occhi del lettore mentre il titolo si compone, e i due
-  // gesti non si pestano i piedi perche' occupano parti diverse dello schermo.
-  avatarEntryStart: 1.0,
+  // L'avatar parte PRIMA della riga 1 dell'headline (0.90): e' il primo gesto
+  // della scena. Prima partiva a 1.00, cioe' DOPO che la headline si era
+  // composta e ferma, e in quel momento la pagina offriva gia' all'utente
+  // l'indicazione di scorrere: si poteva andare via prima ancora di aver
+  // visto il viso.
+  avatarEntryStart: 0.6,
 
   // Mezzo secondo di salita. Piu' corto sembra uno scatto dal nulla, piu'
   // lungo tiene l'avatar in attesa per un tempo che il lettore non spiega.
@@ -121,29 +123,42 @@ export const ENTRY_CONFIG = {
   avatarEntryEasing: [0.4, 0, 0.2, 1] as BezierEasing,
 
   // -- LA SEQUENZA DI ESPRESSIONI -------------------------------------------
-  // Il blink segue subito l'atterraggio: arriva, guarda, e batte le ciglia
-  // come farebbe una persona appena rivista.
-  avatarBlinkStart: 1.5,
+  // Il blink segue l'atterraggio dell'avatar (0.60 + 0.50 = 1.10): arriva,
+  // guarda, e batte le ciglia come farebbe una persona appena rivista.
+  avatarBlinkStart: 1.1,
   avatarBlinkDuration: 150,
 
-  // La sorpresa e' la risposta al razzo, e non ha un orario suo: parte quando il
-  // razzo entra. Resta solo la durata, che e' quanto il viso tiene l'espressione
-  // prima che il sorriso la sciolga.
+  // LA SORPRESA ha adesso un orario suo e non nasce piu' dal razzo.
   //
-  // Il vecchio `avatarSurpriseStart` e' sparito perche' niente lo leggeva piu':
-  // lasciare in tabella un tempo che sembra comandare qualcosa ma non
-  // comanda niente e' il modo piu' economico di far tornare questo difetto fra
-  // sei mesi.
-  avatarSurpriseDuration: 200,
+  // Prima partiva insieme al razzo scripted, a 2.00s: e l'avatar a quel punto
+  // aveva gia' finito l'ingresso da un secondo e mezzo, quindi non era
+  // "durante l'apparizione" ma un richiamo tardivo, e l'idle poteva gia' essere
+  // ripartito. Ora parte a 0.75, mentre l'avatar sta ancora salendo, e tiene
+  // l'espressione abbastanza da essere LETTA: 200ms non si percepivano.
+  avatarSurpriseStart: 0.75,
 
-  // Il sorriso dura idem, e come la sorpresa non ha un orario: parte quando il
-  // razzo esce dal bordo sinistro, insieme al rilascio dello sguardo.
+  // 700ms: dentro la finestra 600-800ms in cui la sorpresa si deve leggere come
+  // sorpresa (occhi spalancati, bocca aperta) e non come un lampo. La posa e'
+  // quella gia' dichiarata in `poses.sorpresa` piu' sotto, quindi non e' stato
+  // inventato nulla: esisteva gia' ed era semplicemente troppo breve.
+  avatarSurpriseDuration: 700,
+
+  // Dopo la sorpresa il viso NON torna di scatto al riposo: si scioglie
+  // nell'idle. 450ms e' abbastanza da non sentire il cambio di regime e
+  // abbastanza corto da non sembrare un'attesa.
+  avatarSurpriseToIdleDuration: 450,
+
+  // Il sorriso dura idem, e come prima non ha un orario: parte quando il razzo
+  // esce dal bordo sinistro, insieme al rilascio dello sguardo.
   avatarSmileDuration: 300,
 
   // -- IL RAZZO COREIOGRAFATO ------------------------------------------------
   // Il razzo parte a 2.00 e mette un secondo ad attraversare lo schermo, quindi
-  // esce a 3.00. La sorpresa parte con lui e il sorriso alla sua uscita: da qui
-  // i tempi delle due espressioni, che non sono piu' scritti a mano.
+  // esce a 3.00. Il suo orario e' FISSO e non e' stato toccato: com'e', pero',
+  // cade dentro la scrittura delle coordinate e la composizione del prompt, per
+  //che' la nuova sequenza finisce prima. Il movimento del razzo, la sua corsia
+  // e il suo sguardo sono esattamente quelli di prima; quello che e' cambiato e'
+  // solo che la sorpresa non e' piu' il suo effetto collaterale.
   rocketScriptedStart: 2.0,
   rocketScriptedDuration: 1.0,
 
@@ -162,18 +177,21 @@ export const ENTRY_CONFIG = {
   glanceThresholdPx: 120,
   glanceDurationMs: 600,
 
-  // L'idle riparte da QUI, e da quello che l'avatar sta dicendo in quel
-  // momento. Non riparte subito dopo il sorriso: il sorriso dura 300ms e un idle
-  // che riparte dopo 100ms lo mangerebbe a meta', e l'utente non vedrebbe mai la
-  // posa per cui l'ha fatta reagire al razzo.
-  avatarIdleStart: 4.0,
+  // L'idle ripparte DOPO l'uscita del razzo (3.00) e la durata del sorriso
+  // (0.30), non prima della sorpresa: l'utente deve poter vedere la sorpresa
+  // intera, e 3.40 la chiude con un secondo e mezzo di respiro. Prima era 4.00,
+  // legato a una coreografia in cui la sorpresa finiva a 2.20.
+  avatarIdleStart: 3.4,
 
   // -- LE COORDINATE E IL PROMPT ---------------------------------------------
-  // Le tre righe di dati si scrivono dopo le espressioni, mentre l'avatar e'
-  // ancora in sorriso. Nessun simbolo: sono dati, non un titolo.
-  coordMilanoStart: 3.0,
-  coordPotenzaStart: 3.15,
-  coordViaLattea: 3.0,
+  // Coordinate e prompt aspettano la FINE della sorpresa (0.75 + 0.70 = 1.45,
+  // piu' i 450ms del passaggio all'idle: 1.90) e non un istante nel vuoto: e'
+  // quello che il lettore deve vedere prima di poter andare avanti, quindi
+  // viene dopo. Il prompt, in particolare, arriva per ultimo e sblocca lo
+  // scroll solo quando ha finito di comporsi.
+  coordMilanoStart: 1.95,
+  coordPotenzaStart: 2.1,
+  coordViaLattea: 1.95,
 
   // Millisecondi per carattere. Piu' lento dei 45ms del titolo: un numero
   // scritto troppo in fretta non si legge, e la riga esiste apposta per essere
@@ -183,5 +201,5 @@ export const ENTRY_CONFIG = {
   // Il prompt di scorrimento parte per ultimo e sblocca la pagina quando ha
   // finito di comporsi: e' l'unico testo che spiega all'utente che puo' andare
   // avanti, quindi finche' non c'e' lo scroll resta fermo.
-  scrollHintStart: 3.5,
+  scrollHintStart: 2.45,
 } as const;

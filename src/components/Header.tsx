@@ -16,8 +16,8 @@ const TITLES = [
   BRAND_TITLE_TEXT,
   BRAND_TITLE_TEXT,
   BRAND_TITLE_TEXT,
-  'SELECTED WORKS',
-  'TRANSMISSION',
+  'LAVORI SELEZIONATI',
+  'TRASMISSIONE',
 ];
 
 export default function Header({ activeSection }: HeaderProps) {

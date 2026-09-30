@@ -171,24 +171,35 @@
     outline-offset: 2px;
   }
 
-  /* L'headline e' il punto di arrivo del focus a fine sequenza.
+  /* Anello di focus del marchio dell'header, cioe' del ritratto quando e' a
+     terra. Stesse due righe della regola sopra e per la stessa ragione: il
+     colore e' il rosa dei testi perche' e' l'unico che si stacca dal fondo senza
+     introdurre un colore nuovo, e l'offset stacca l'anello dal bordo senza
+     spostare il layout.
 
-     `:focus` e NON `:focus-visible`, al contrario del pulsante, e la differenza
-     e' il punto: li' il focus lo mette l'utente e l'anello serve a dirgli dove
-     e' arrivato con il Tab. Qui lo mette la PAGINA, insieme a `preventScroll`,
-     quindi lo schermo non si muove e senza anello l'utente non ha nessun
-     indizio che il focus sia cambiato: resterebbe fermo guardando un titolo
-     che ora e' "attivo" e non lo sembra. Un `:focus-visible` mostrerebbe
-     l'anello solo a chi e' arrivato con la tastiera, e lascerebbe senza
-     segnale tutti gli altri.
-
-     Stesso colore e stesso spessore del pulsante perche' e' la stessa pagina.
-     `outline` e non `border` perche' non sposta il layout, e sull'headline uno
-     spostamento di 2px cambierebbe la larghezza della colonna, che il Passo 4
-     ha appena stabilizzato a 0px. */
-  [data-scene='hero'] h2:focus {
+     L'attributo e' il gancio della regola e non una classe perche' il nodo
+     cambia significato nel tempo (prima immagine, poi comando) e una classe
+     dovrebbe accendersi e spegnersi con lui; il ruolo no, e il fuoco si
+     interesserebbe al ruolo. */
+  [data-header-mark]:focus-visible {
     outline: 2px solid rgb(var(--color-pink));
-    outline-offset: 6px;
+    outline-offset: 2px;
+  }
+
+  /* NESSUN riquadro attorno all'headline. La regola c'era ed elencava i suoi
+     motivi (il focus la mette la pagina, non l'utente), ma il risultato non e'
+     stato quello: a fine sequenza l'anello restava dipinto intorno al titolo
+     per tutta la visita, e l'utente lo leggeva come un riquadro della pagina e
+     non come un indicatore di focus.
+
+     Il focus PROGRAMMATICO resta com'e' — e' un punto di arrivo utile per chi
+     naviga da tastiera — ma senza anello. Senza questo, rimossa la regola
+     precedente, tornava l'anello di default del browser (misurato: 3px), cioe'
+     lo stesso difetto con un colore diverso. Il riquadro non deve esistere in
+     nessuno stato: ingresso, riposo, dissolvenza e ritorno, a ogni breakpoint. */
+  [data-scene='hero'] h2:focus,
+  [data-scene='hero'] h2:focus-visible {
+    outline: none;
   }
 
   /* I DUE STATI DELLO SCRAMBLE.
@@ -220,14 +231,29 @@
      limiti, così la striscia resta usabile sia su portatile che su schermo
      largo. I due numeri non sono liberi: il passo fra slot è card + gap e
      quello è la minima distanza che rende impossibile la sovrapposizione fra
-     card adiacenti. A 1440 (20.8vw = 299.5, 4.2vw = 60.5) il passo è 359.5px
-     e la composizione di tre card occupa 3×299.5 + 2×60 = 958px, lasciando il
-     vuoto che serve a far leggere la corsa come uno spazio e non come un muro.
-     L'altezza non è dichiarata: deriva dall'aspect 3:4 applicato alla card, così
-     non può mai sforare la scena. */
+     card adiacenti.
+
+     La card occupa una fetta ben più larga del vecchio 20.8vw (max 320px):
+     a 1512 la corsa lasciava metà destra dello schermo vuota, e la Works si
+     leggeva come una striscia corta centrata invece di una parete di lavori.
+     Ora la card è 27vw entro [300, 460] e il gap 2vw: a 1512 sono 408px con
+     30px di respiro, quindi dalla prima card ancorata al gutter sinistro si
+     leggono tre card intere e una quarta che sbuca dal bordo destro — la
+     condizione di "mai vuoto a destra" è geometrica, non un caso.
+
+     Sotto md la scheda diventa una fetta di schermo e il passo si stringe:
+     la card è 80vw, così la successiva sbuca con ~20vw di peek e il dito può
+     accorgersi che ce n'è un'altra. */
   :root {
-    --works-card-w: clamp(260px, 20.8vw, 320px);
-    --works-gap: clamp(28px, 4.2vw, 60px);
+    --works-card-w: clamp(300px, 27vw, 460px);
+    --works-gap: clamp(18px, 2vw, 40px);
+  }
+
+  @media (max-width: 767px) {
+    :root {
+      --works-card-w: 80vw;
+      --works-gap: 5vw;
+    }
   }
 
   /* Il vuoto che riempie lo spazio avanzato del flex: serve perché la scena
@@ -268,6 +294,166 @@
 
   .grid-wireframe {
     border: 1px solid rgb(var(--color-pink) / 0.2);
+  }
+
+  /* L'ALTEZZA COMUNE delle card.
+     `--works-card-h` non è dichiarata qui con un valore: la scrive
+     `ProjectsScene` dopo aver misurato la card vera più alta, perché l'altezza
+     dipende dal contenuto (titolo su due righe, numero di tag, lunghezza del
+     brief) e da quando arrivano i font. Un valore fisso in CSS sarebbe sbagliato
+     a ogni viewport e con i font non ancora caricati.
+
+     Il fallback serve solo per il primo paint, prima che la misura arrivi:
+     senza, le card avrebbero altezza zero per un frame e la scena lampeggerebbe.
+     3:4 è l'aspect dichiarato a parole nelle card vere, quindi il fallback è
+     coerente con quello che segue. */
+  .works-card-shell {
+    height: var(--works-card-h, calc(var(--works-card-w) * 4 / 3));
+  }
+
+  /* ── LA CARD «+» : UNO SLOT VUOTO ─────────────────────────────────────────
+     Stessa geometria delle card vere (larghezza e aspect ereditano
+     `--works-card-w` e il wrapper), linguaggio opposto: dove le altre sono
+     casi chiusi, questa è un campo da riempire.
+
+     Tre dettagli, e tutti e tre sono scelte e non decorazioni:
+
+     - il BORDO è tratteggiato e più spesso (1.5px): è il segnale
+       convenzionale del campo vuoto, e su un bordo pieno da 1px la card si
+       sarebbe letta come un caso come gli altri, solo senza testo.
+     - lo SFONDO è quasi trasparente invece di `bg-dark-green` pieno: le card
+       vere sono riquadri chiusi, questa è un riquadro aperto. Il contrasto
+       con la carta accanto la distingue senza dover cambiare il bordo.
+     - il TRATTEGGIO SCORRE in hover: un bordo tratteggiato statico è
+       ambiguo — non si sa se è selezionabile. Se si muove, lo si sa. */
+
+  .add-project-card {
+    /* Il bordo NON è quello nativo `dashed`: un bordo tratteggiato è un'immagine
+       che il browser calcola una volta sola e non sa animare, e per farlo
+       scorrere servirebbe un trucco con i gradienti che si vede sotto come
+       sbavatura. Qui il bordo vero è disegnato da uno strato dedicato
+       (::after, sotto) che è un gradiente a tre colori: lo strato copre
+       l'area, la finestra centrale è trasparente, e il resto — due bordi e due
+       angoli — resta dipinto. Così il tratteggio è un'immagine che si può
+       spostare con `background-position`, che è una proprietà di disegno e non
+       costa layout. */
+    border: 1.5px solid transparent;
+    cursor: pointer;
+    transition:
+      background-color 0.35s ease,
+      box-shadow 0.35s ease;
+  }
+
+  /* Il bordo tratteggiato: uno strato che copre tutta la card con un gradiente
+     a tre tratti — pieno, vuoto, pieno — e tiene scoperto un anello interno
+     largo quanto la cornice. Lo spessore della cornice è l'unico numero che
+     governa sia il bordo a riposo sia quello in hover. */
+  .add-project-card::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1.5px;
+    background-image: linear-gradient(
+      90deg,
+      rgb(var(--color-pink) / 0.5) 0 7px,
+      transparent 7px 14px
+    );
+    background-size: 14px 100%;
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+
+  .add-project-card:hover {
+    background-color: rgb(var(--color-deep) / 0.35);
+    box-shadow: 0 0 34px -6px rgb(var(--color-accent) / 0.5);
+  }
+
+  /* Il '+' grande: sottile e largo, quanto basta per essere l'elemento
+     dominante senza diventare un blocco pieno. 32% della larghezza della card
+     letta dalla stessa variabile che governa la card stessa: il segno cresce e
+     si stringe con lei, e non c'è un numero da ritoccare a ogni breakpoint. */
+  .add-project-card__plus {
+    font-size: calc(var(--works-card-w) * 0.32);
+    line-height: 0.8;
+  }
+
+  /* Il titolo sotto il '+' è slab come i titoli di sezione, ma più piccolo:
+     sta nello stesso registro senza contendere il segno. */
+  .add-project-card__lead {
+    font-size: calc(var(--works-card-w) * 0.062);
+  }
+
+  /* Tre gesti sul '+', e i tre hanno tempi diversi per una ragione precisa:
+     il RESPIRO è lento e va avanti per sempre (è il segnale «vivo» a riposo),
+     la ROTAZIONE è un colpo secco al passaggio (è la risposta all'azione), il
+     bagliore è un crescendo. Con gli stessi tempi i tre si leggerebbero come
+     un unico gesto confuso. */
+  @keyframes add-project-breathe {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.04); }
+  }
+
+  .add-project-card__plus {
+    animation: add-project-breathe 3s ease-in-out infinite;
+  }
+
+  @keyframes add-project-spin {
+    to { transform: rotate(90deg); }
+  }
+
+  /* La rotazione parte da `scale(1)`, cioè da dove lascia il respiro: se il
+     `transform` di partenza fosse `scale(1.04)` il salto sarebbe visibile a
+     metà ciclo. Per questo l'animazione dichiara lei stessa il punto di
+     partenza invece di ereditarlo. */
+  .add-project-card:hover .add-project-card__plus,
+  .add-project-card:focus-visible .add-project-card__plus {
+    animation: add-project-spin 0.5s cubic-bezier(0.34, 1.4, 0.64, 1) forwards;
+  }
+
+  /* Il tratteggio che scorre. Si sposta `background-position` dello strato del
+     bordo, non della card: il gradiente è di 14px (7 pieni + 7 vuoti) e lo
+     shift è della stessa lunghezza, quindi il tratteggio riparte esattamente
+     dove era e il moto non si vede ripartire da capo. */
+  @keyframes add-project-dash-run {
+    to { background-position: 14px 0; }
+  }
+
+  .add-project-card:hover::after,
+  .add-project-card:focus-visible::after {
+    animation: add-project-dash-run 0.9s linear infinite;
+  }
+
+  /* Focus visibile: la card intera è un `<button>`, quindi il focus ci va
+     davvero (Tab la raggiunge). Senza un anello esplicito l'utente da
+     tastiera non saprebbe dov'è. `outline` e non `ring`: i token del progetto
+     usano `outline` anche sull'headline, e due sistemi diversi per lo stesso
+     concetto si vedono. */
+  .add-project-card:focus-visible {
+    outline: 2px solid rgb(var(--color-accent) / 0.9);
+    outline-offset: 3px;
+    box-shadow: 0 0 34px -6px rgb(var(--color-accent) / 0.5);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    /* Unica regola che spegne i tre gesti insieme. Senza, il '+' continuerebbe
+       a respirare su una pagina in cui l'utente ha chiesto che nulla si
+       muova, e il difetto sarebbe invisibile a chi non guarda proprio quel
+       segno. Il contenuto e il layout restano identici: cambia solo il moto. */
+    .add-project-card__plus,
+    .add-project-card:hover .add-project-card__plus,
+    .add-project-card:focus-visible .add-project-card__plus,
+    .add-project-card:hover::after,
+    .add-project-card:focus-visible::after {
+      animation: none;
+    }
   }
 
   /* Pulsazione dei suggerimenti di scroll ([SCORRI PER INIZIARE ↓],

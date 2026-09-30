@@ -255,19 +255,25 @@ export const HERO_PORTRAIT_X_RATIO = 0.29;
  * partirebiano insieme e l'utente non leggerebbe la sequenza.
  */
 /**
- * Quanto inizia prima della fine del reveal il ricentraggio della sagoma, in
- * frazioni di viewport.
+ * Quota della dissoluzione da cui parte il VOLO del ritratto verso l header.
  *
- * La traslazione termina esattamente a `revealEnd`, cioe' quando l'SVG ha
- * finito il fade: cosi', quando rimane visibile solo la sagoma, questa e'
- * gia' al centro e ferma, pronta a dissolversi al prossimo scroll. Prima la
- * finestra partiva DOPO la fine del fade e finiva 175px piu' in la', quindi la
- * sagoma si spostava a vista.
+ * Il volo e il ricentraggio della sagoma condividono questa finestra: e il
+ * patto che li tiene sincroni, perche' quando tornano all'hero devono arrivare
+ * insieme e non uno di corsa davanti all altro.
  *
- * Il ritratto diventa completamente rosa a opacita' residua 0.35, ovvero poco
- * prima di questo valore: viraggio e scorrimento partono insieme.
+ * Parte prima che l'SVG termini di dissolversi, cosi l'occhio vede l'avatar
+ * che sale mentre si affiora la sagoma sulla sua stessa posizione: i due si
+ * sostituiscono invece di scomparire e ricomparire altrove. Il valore 0.72 fa
+ * occupare la salita agli ultimi due terzi della dissoluzione: inizio col
+ * ritratto fermo al suo posto, che e' cio' che l'utente vede nei primi scorsi
+ * di scroll, e ultimi scorsi la salita vera.
+ *
+ * Vive qui e non in HeroScene perche a leggerlo serve anche a
+ * `shapeRecenterPhase`, che sta nell'altro componente: se la quota restasse
+ * dentro HeroScene, la sagoma dovrebbe importarla da li' o copiare il numero,
+ * ed e esattamente la copia che ha fatto divergere i due movimenti.
  */
-export const SHAPE_RECENTER_LEAD_RATIO = 0.18;
+export const PORTRAIT_LOGO_FLIGHT_RATIO = 0.72;
 
 /**
  * Fase del ricentraggio della sagoma E del ritratto SVG, da 0 (posizione
@@ -281,14 +287,28 @@ export const SHAPE_RECENTER_LEAD_RATIO = 0.18;
  * La finestra termina a `revealEnd`, cioe' quando l'SVG ha finito il fade:
  * cosi', quando rimane visibile solo la sagoma, questa e' gia' al centro e
  * ferma, pronta a dissolversi al prossimo scroll.
+ *
+ * L'INIZIO e' quello del VOLO, ed e' la correzione che allinea i due movimenti.
+ * Prima partiva da `end - SHAPE_RECENTER_LEAD_RATIO * viewportHeight`, cioe' da
+ * una quota di viewport: una finestra che al variare dello schermo non
+ * coincideva con quella del ritratto, e i due arrivavano sfalsati. Misurato a
+ * 1512x780: il volo finiva a 932px e la sagoma a 850px, cioe' 82px di dislivello —
+ * tornando in hero l'avatar era gia' al suo posto mentre la nebulosa stava
+ * ancora scorrendo, e il doppio profilo restava in campo per un tratto.
+ *
+ * Ora entrambe leggono `portraitFlightWindow`: stessa funzione, stessi estremi,
+ * quindi non possono disaccordarsi. La perdita e' voluta: il ricentraggio
+ * occupa 59px invece di 140px, quindi la sagoma si centra piu' in fretta. E' il
+ * prezzo della sincronizzazione, e la sagoma arriva prima che il lettore abbia
+ * il tempo di accorgersi che si e' mossa.
  */
 export const shapeRecenterPhase = (
   scrollY: number,
+  heroTop: number,
   nebulaTop: number,
-  viewportHeight: number,
 ) => {
-  const end = portraitRevealEnd(nebulaTop, viewportHeight);
-  return phase(scrollY, end - SHAPE_RECENTER_LEAD_RATIO * viewportHeight, end);
+  const { start, end } = portraitFlightWindow(heroTop, nebulaTop);
+  return phase(scrollY, start, end);
 };
 
 /**
@@ -307,19 +327,68 @@ export const HERO_PORTRAIT_HEIGHT_VH = 41.33 * 1.25 * 1.25;
 export const HERO_PORTRAIT_HEIGHT_PX = 313 * 1.25 * 1.25;
 
 /**
- * Quota del viaggio Hero -> Nebula in cui comincia a dissolversi il ritratto.
- * Sostituisce il 1.44vh che stava scritto a mano in HeroScene: finche i due
- * modi di scrivere la finestra hanno prodotto lo stesso numero, coincidevano
- * solo perche le tre sezioni sono tutte h-screen.
+ * LE TRE COSTANTI DELLA SEQUENZA HERO → LAVORI.
+ *
+ * La sequenza (headline che sfuma, avatar che sale, sagoma che nasce, camera
+ * che ricentra) è UNA sola finestra di scroll, e queste tre cifre la
+ * governano. Sono in alto e sole perché ritoccarle non deve richiedere di
+ * leggere la timeline: ogni volta che la sequenza sembrava «troppo lunga» o
+ * «troppo lenta» il numero da cambiare era uno di questi tre, non una formula
+ * sparsa fra quattro file.
+ *
+ * HERO_SCROLL_LENGTH — la DURATA della sequenza, come frazione della distanza
+ * fra la prima pagina e la nebulosa. Prima la finestra andava da 0.44 a ~1 di
+ * quella distanza, cioè partiva a metà strada: i primi due terzi di scroll non
+ * movevano niente, e avatar e titolo restavano fermi a piena opacità. Ora è
+ * 0.27, poco più della metà della precedente (0.54 → 0.27 del viaggio totale):
+ * è il valore che chiede «concludersi in circa metà dello scroll attuale».
+ * Alzarlo allunga la sequenza, abbassarlo la accorcia.
+ *
+ * DISSOLVE_START e DISSOLVE_END — INIZIO e FINE della dissoluzione, in
+ * frazione del progresso della sequenza (0 = appena comincia, 1 = finisce).
+ * Il trucco per togliere il tratto morto è DISSOLVE_START a 0: il ritratto e il
+ * testo reagiscono dal PRIMO pixel di scroll invece di aspettare. Alzarlo
+ * reintroduce l'attesa; abbassare DISSOLVE_END finisce la dissoluzione prima,
+ * lasciando un tratto finale in cui la pagina è già vuota.
  */
-export const PORTRAIT_REVEAL_START_RATIO = 0.44;
+export const HERO_SCROLL_LENGTH = 0.27;
+export const DISSOLVE_START = 0;
+export const DISSOLVE_END = 1;
+
 /**
- * Fine della dissoluzione: 28px, o il 3.5% della viewport se il piu piccolo dei
- * due, PRIMA della nebulosa. Vive qui perche tre consumatori ne hanno bisogno e
- * devono concordare al pixel.
+ * La lunghezza della sequenza in px, cioè il tratto di scroll che la copre.
+ *
+ * È proporzionale alla distanza fra le due sezioni e non un numero fisso: le
+ * due sono entrambe alte una viewport, quindi su qualunque schermo la
+ * sequenza occupa la stessa frazione del viaggio, e i pixel si adattano da
+ * soli.
  */
-export const portraitRevealEnd = (nebulaTop: number, viewportHeight: number) =>
-  nebulaTop - Math.min(28, viewportHeight * 0.035);
+const heroSequenceLength = (heroTop: number, nebulaTop: number) =>
+  (nebulaTop - heroTop) * HERO_SCROLL_LENGTH;
+
+/** Inizio della dissoluzione, in px di pagina. */
+export const portraitRevealStart = (heroTop: number, nebulaTop: number) =>
+  heroTop + heroSequenceLength(heroTop, nebulaTop) * DISSOLVE_START;
+
+/** Fine della dissoluzione, in px di pagina. */
+export const portraitRevealEnd = (heroTop: number, nebulaTop: number) =>
+  heroTop + heroSequenceLength(heroTop, nebulaTop) * DISSOLVE_END;
+
+/**
+ * La finestra del VOLO, cioe' gli ultimi `PORTRAIT_LOGO_FLIGHT_RATIO` della
+ * dissoluzione: parte dove comincia a salire l'avatar e finisce con la fine
+ * della dissoluzione.
+ *
+ * UNICA sorgente per i due movimenti che DEVONO arrivare insieme: la salita
+ * dell'avatar verso l'header e il ricentraggio della sagoma al centro. Se i due
+ * calcolassero la finestra per conto proprio, un px di differenza li separerebbe
+ * per tutta la transizione, e tornandone uno prima dell'altro l'occhio vedrebbe
+ * il doppio profilo: l'avatar gia' al suo posto mentre la nebulosa scorre ancora.
+ */
+export const portraitFlightWindow = (heroTop: number, nebulaTop: number) => {
+  const { start, end } = portraitRevealWindow(heroTop, nebulaTop);
+  return { start: start + (end - start) * PORTRAIT_LOGO_FLIGHT_RATIO, end };
+};
 
 /**
  * Inizio e fine della dissoluzione, in px di pagina.
@@ -333,10 +402,9 @@ export const portraitRevealEnd = (nebulaTop: number, viewportHeight: number) =>
 export const portraitRevealWindow = (
   heroTop: number,
   nebulaTop: number,
-  viewportHeight: number,
 ) => {
-  const end = portraitRevealEnd(nebulaTop, viewportHeight);
-  const start = heroTop + (nebulaTop - heroTop) * PORTRAIT_REVEAL_START_RATIO;
+  const end = portraitRevealEnd(heroTop, nebulaTop);
+  const start = portraitRevealStart(heroTop, nebulaTop);
   return { start, end };
 };
 
@@ -345,8 +413,7 @@ export const portraitRevealPhase = (
   scrollY: number,
   heroTop: number,
   nebulaTop: number,
-  viewportHeight: number,
 ) => {
-  const { start, end } = portraitRevealWindow(heroTop, nebulaTop, viewportHeight);
+  const { start, end } = portraitRevealWindow(heroTop, nebulaTop);
   return phase(scrollY, start, end);
 };

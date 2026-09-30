@@ -3,11 +3,13 @@ import type { MotionValue } from 'framer-motion';
 import {
   clamp01,
   invalidateSceneTops,
-  smoothstep,
+
 } from '@/lib/scrollMath';
 import { useSmoothScroll } from '@/providers/smoothScrollContext';
+import { reducedMotion } from '@/lib/motionPreference';
 import type { Project } from '@/data/projects';
 import ProjectCard from './ProjectCard';
+import AddProjectCard from './AddProjectCard';
 
 interface ProjectsSceneProps {
   projects: Project[];
@@ -15,78 +17,78 @@ interface ProjectsSceneProps {
   scrollY: MotionValue<number>;
 }
 
-// Planata della camera: la card entra da una profondità reale (translateZ) e la
-// sua dimensione cresce da un punto (CARD_POINT_SCALE) con una curva che
-// accelera al centro e si posa senza scatto nell'ultimo tratto. Una legge 1/z
-// pura sarebbe più "fotografica" ma fa esplodere la dimensione nell'ultimo 1%
-// dello scroll: il risultato è uno scatto, non una planata.
-const CARD_POINT_SCALE = 0.05;
-const CARD_GROWTH_EXPONENT = 1.9;
-const CARD_START_DEPTH = 950;
-// Deve restare allineata alla perspective inline della scena (ProjectsScene,
-// style={{ perspective: '1200px' }}): il blur in px di schermo la usa per
-// compensare il rimpicciolimento prospettico del filter.
-const CARD_PERSPECTIVE_PX = 1200;
-// Il fuori fuoco è espresso in pixel di SCHERMO: il blur CSS è locale e la
-// proiezione prospettica lo rimpicciolirebbe, quindi va diviso per la
-// proiezione corrente (con un tetto locale di sicurezza).
-const CARD_COC_SCREEN_PX = 26;
-const CARD_MAX_LOCAL_BLUR_PX = 64;
-// Crossfade disco bokeh -> card: la card prende fuoco dall'inizio del suo
-// volo, così il contenuto segue la comparsa del disco senza ulteriore attesa.
-const CARD_FOCUS_START = 0;
-const CARD_FOCUS_END = 0.52;
-const CARD_DISC_MIN_PX = 22;
-const CARD_DISC_MAX_PX = 54;
-const CARD_DISC_ALPHA = 0.48;
-// Il disco ha una componente iniziale già visibile: il punto che genera la
-// card deve esserci prima che il contenuto inizi il suo stagger.
-const CARD_DISC_INITIAL_ALPHA = 0.38;
-const CARD_DISC_FADE_IN = 0.035;
-// Lato FISSO del disco bokeh. Il disco non viene più ridimensionato: la
-// dimensione voluta si ottiene con transform: scale(), e il gradiente radiale
-// scala con l'elemento quindi a occhio è identico. Il motivo è che width/height
-// sono proprietà di LAYOUT: riscriverle a ogni frame su sei elementi
-// invalidava il layout sessanta volte al secondo per un puro effetto di
-// disegno che la GPU può fare da sola. 200px è la base più grande che serve
-// (il disco locale arriva a ~790px quando la card è un punto al centro di
-// fuga) e tiene la scala sotto 4, con il raggio di sfocatura ben oltre la
-// risoluzione del gradiente.
-const CARD_DISC_BASE_PX = 200;
-// Stesse stop della sprite bokeh del canvas: il disco lontano e le particelle
-// della nebulosa sono lo stesso materiale fotografico.
-const CARD_BOKEH_GRADIENT =
-  'radial-gradient(circle, rgba(252,178,188,0.58) 0%, rgba(252,178,188,0.48) 28%, rgba(252,178,188,0.32) 58%, rgba(252,178,188,0.11) 82%, rgba(252,178,188,0) 100%)';
-const CARD_DEPTH_JITTER = 0.18;
+// IL RESPIRO ATTORNO AGLI HUD, e il tetto di altezza della card.
+//
+// `SAFE_AREA_GAP` è la distanza che le card mantengono dagli elementi HUD: 16px,
+// ed è l'unico px di questa sezione che non viene misurato dal DOM, perché è un
+// margine di cortesia e non una posizione.
+//
+// `CARD_MAX_HEIGHT_RATIO` è il rapporto massimo fra altezza e larghezza della
+// card. Serve a mantenere le proporzioni su viewport alte e larghe: senza, la
+// banda sicura potrebbe imporre card alte 1.9 volte la larghezza, che non hanno
+// più niente a che fare con una card.
+const SAFE_AREA_GAP = 16;
+const CARD_MAX_HEIGHT_RATIO = 1.5;
+
 // Quota del viaggio Nebula → Works in cui i DISCHI bokeh delle card diventano
 // visibili. Anticipa l'ingresso della Works: i dischi sono gia' li' mentre la
 // scena non e' ancora entrata, e la griglia si compone dentro Works.
 const CARD_SOURCE_REVEAL_RATIO = 0.34;
-// Stagger fra i voli delle card che nascono in anticipo. E' una frazione della
-// distanza fra il reveal delle sorgenti e l'ingresso del Works, divisa per il
-// numero di slot: ogni card in volo parte un pezzettino dopo della precedente,
-// cosi' la composizione si scioglie a ondate invece che insieme.
-const CARD_STAGGER_RATIO = 0.22;
-// Il contenuto della card parte un filo DOPO il suo disco sorgente: il punto
-// bokeh deve gia' essere li' quando la card comincia a prendere fuoco, altrimenti
-// si vedrebbe una card che si materializza dal nulla.
-const CARD_FLIGHT_START_OFFSET_PX = 6;
-// Quota del viaggio Nebula → Works in cui la card 1 INIZIA a materializzarsi
-// dal punto di fuga. Non parte dal primo pixel: prima arrivava al Works gia'
-// perfettamente composta, quindi il viaggio in cui la camera esplode finiva con
-// una griglia ferma che non spiegava da dove fosse venuta. Partendo a meta'
-// strada la si vede crescere DENTRO la nebulosa e la Works la accoglie gia' a
-// meta' formazione.
-const IN_BIRTH_START_RATIO = 0.45;
 // Quota della sezione Works entro cui le card nate in anticipo chiudono il
 // volo: dentro i primi pixel della sezione, quindi si compongono mentre lo
 // strip comincia gia' a scorrere. Il valore e' volutamente piccolo: se le card
 // chiudessero troppo tardi, al fermo del Works la griglia sarebbe ancora in
 // formazione e non si leggerebbe comeWORKS finito.
 const IN_BIRTH_END_RATIO = 0.08;
-// Una card non nasce "fuori campo": il disco bokeh piu' piccolo deve essere gia'
-// dentro lo schermo quando il volo parte, altrimenti si vedrebbe un salto.
-const CARD_ENTRY_MARGIN_PX = 8;
+// ── L'INGRESSO DELLE CARD: DA FUORI BORDO DESTRO ─────────────────────────
+//
+// Prima le card crescevano da un punto centrale (CARD_POINT_SCALE, la planata):
+// tutte e sei nascevano nello stesso punto e si aprivano come un'iris. È il
+// difetto da correggere — l'ingresso deve venire da FUORI, dal bordo destro, e
+// non da un punto in mezzo allo schermo.
+//
+// Quindi qui non c'è nessuna profondità e nessuna scala: le card sono già nella
+// loro posizione finale (lo strip le mette in fila) e l'ingresso le TRAE dentro
+// dallo spazio che sta oltre il bordo destro della viewport. Tre cose si muovono
+// insieme, tutte funzione del tempo:
+//
+//   offsetX : da (larghezza viewport) a 0 — parte fuori campo, arriva al posto
+//   rotazione: da CARD_ENTER_ROTATION a 0 — arriva dritta
+//   opacità : da 0 a 1 — accende mentre entra
+//
+// I tre numeri sono tempi in secondi, non pixel: è un'animazione che parte
+// quando la Works entra in scena, non qualcosa che segue i pixel di scroll.
+// IL VENTAGLIO: le card nascono impilate al CENTRO e si aprono ai loro slot.
+//
+// Non più un ingresso da fuori bordo destro, e non più un orologio: il moto è
+// una funzione del PROGRESS dello scroll della fase di nascita, quindi è
+// scrubbato, reversibile e non ha nessuno stato accumulato.
+//
+//   scala     : da CARD_FAN_START_SCALE a 1 — la mazzetta si apre
+//   posizione : dal centro della viewport al suo slot reale
+//   rotazione : da ±CARD_FAN_ROTATION gradi a 0 — le carte si raddrizzano
+//   opacità   : da 0 a 1 — accendono mentre si aprono
+//
+// Lo STAGGER è una frazione della finestra di nascita, non un tempo in ms: il
+// moto è scrubbato, e in un moto scrubbato un ritardo ha senso solo in px di
+// scroll. CARD_FAN_STAGGER_RATIO = 0.12 vuol dire che ogni card aspetta circa
+// un ottavo della finestra prima di partire — circa 60-90ms alla velocità con
+// cui la sezione viene percorsa normalmente. Il valore non può superare 1/(card−1):
+// oltre, l'ultima card avrebbe un ritardo maggiore della finestra stessa e non
+// si aprirebbe mai.
+const CARD_FAN_START_SCALE = 0.25;
+const CARD_FAN_ROTATION = 4;
+const CARD_FAN_STAGGER_RATIO = 0.12;
+// L'ease del ventaglio: parte subito e si posa in fondo (ease-out cubico), così
+// la card si stacca dal centro e si ferma al suo posto invece di frenare.
+const cardFanEase = (t: number) => 1 - Math.pow(1 - t, 3);
+// Il trameggio in uscita: la card che esce a sinistra si spegne nell'ultima
+// CARD_EXIT_FADE_SPAN mezza card, e non sotto CARD_EXIT_FADE_MIN. Il minimo
+// serve perché una card già fuori campo resti accennata invece di flickering.
+const CARD_EXIT_FADE_SPAN = 1.1;
+const CARD_EXIT_FADE_MIN = 0.12;
+
+
 
 // ---------------------------------------------------------------------------
 // Il nastro: UNA card per step
@@ -229,9 +231,9 @@ export default function ProjectsScene({
   const sceneRef = useRef<HTMLDivElement>(null);
   const stripRef = useRef<HTMLDivElement>(null);
   const cardRefs = useRef<Array<HTMLDivElement | null>>([]);
-  const cardDepthRefs = useRef<Array<HTMLDivElement | null>>([]);
-  const cardBlurRefs = useRef<Array<HTMLDivElement | null>>([]);
-  const cardDiscRefs = useRef<Array<HTMLSpanElement | null>>([]);
+  // I ref delle card: uno per slot, e l'ultimo slot è la card «+». Gli altri
+  // tre ref che c'erano (depth, blur, disco bokeh) sono spariti con la planata:
+  // senza profondità non c'è più niente da simulare dentro la card.
   // Ultimo stato di atterraggio noto per card. Serve a non riscrivere
   // willChange a ogni frame: la commutazione 'transform' -> 'auto' avviene una
   // volta sola per card, e scriverla sessanta volte al secondo è lavoro
@@ -284,6 +286,11 @@ export default function ProjectsScene({
   // scritte possono andare a capo o cambiare altezza.
   const boxCenterOffsetRef = useRef(0);
   const [layoutVersion, setLayoutVersion] = useState(0);
+  // LO SCARTO VERTICALE DELLA SAFE AREA: quanto il centro delle card deve
+  // salire (o scendere) rispetto al centro della scena, perché stanno nella
+  // banda fra gli HUD e non nello schermo. Vive in un ref perché cambia solo
+  // al resize e non deve provocare un render.
+  const safeCenterOffsetRef = useRef(0);
   const { subscribeFrame, lenis } = useSmoothScroll();
   useLayoutEffect(() => {
     const worksSection = document.querySelector<HTMLElement>('[data-scene="works"]');
@@ -318,6 +325,11 @@ export default function ProjectsScene({
       };
       const scene = sceneRef.current;
       const strip = stripRef.current;
+      // Il marchio in alto è il terzo riferimento fisso che le card non devono
+      // coprire, insieme alla coppia geografica e alla telemetria. È un
+      // elemento `fixed` della pagina, quindi il suo rect è già in coordinate
+      // di viewport.
+      const headerEl = document.querySelector<HTMLElement>('header');
       if (scene) {
         // perspectiveOrigin in coordinate LOCALI del box della scena. offsetTop
         // è relativo alla sezione (position: relative), quindi l'offset del
@@ -376,26 +388,106 @@ export default function ProjectsScene({
         // due punti diversi, e il primo non sarebbe il centro. Usando lo stesso
         // valore, nascita e atterraggio coincidono per costruzione — ed è
         // l'unica cosa che rende automatico lo zero di origine della card 1.
-        const centerX = perspectiveOriginRef.current.x > 0
-          ? perspectiveOriginRef.current.x
-          : scene.clientWidth / 2;
         const firstSlotX = slotCentersRef.current.find((slot) => slot)?.x;
         const lastSlotX = slotCentersRef.current[slotCentersRef.current.length - 1]?.x;
         const cardTotal = Math.max(1, slotCentersRef.current.length - 1);
-        // birthOffset è la posizione dello strip a cui la PRIMA card ha il suo
-        // slot di arrivo sul centro; travel è quella a cui ce l'ha l'ULTIMA. La
-        // differenza è la corsa utile, e vale (card−1)·step per costruzione:
-        // non è un numero tarato, è la conta degli step da percorrere.
-        const birthOffset = firstSlotX !== undefined
-          ? firstSlotX - centerX
+        const measuredCardWidth =
+          cardRefs.current[0]?.getBoundingClientRect().width ?? 0;
+        const cardHalf = measuredCardWidth / 2;
+        // LA SAFE AREA VERTICALE, misurata dal DOM.
+        //
+        // Le card non possono coprire i tre riferimenti fissi della pagina: il
+        // marchio in alto, la coppia geografica in alto a destra e la
+        // telemetria in basso a sinistra. Prima l'altezza delle card veniva dal
+        // loro contenuto e arrivava fin sotto le etichette, toccandole.
+        //
+        // La banda sicura va dal fondo del riferimento PIÙ ALTO al tetto del
+        // PIÙ BASSO, con un respiro di SAFE_AREA_GAP attorno. Si misura tutto con
+        // `getBoundingClientRect`, senza un solo px scritto a mano: le due
+        // etichette HUD sono `hidden` sotto md, quindi il loro rect è vuoto e la
+        // safe area si allarga da sola alle viewport strette — che è la richiesta
+        // per il mobile, ottenuta senza un ramo dedicato.
+        //
+        // I riferimenti sono in ordine di esistenza: `max` per il soffitto e
+        // `min` per il pavimento, così se un HUD è nascosto non si crea mai una
+        // banda a rovescio.
+        const safeGap = SAFE_AREA_GAP;
+        const viewportBox = scene.clientHeight;
+        // La banda parte dalla viewport intera e si RESTRINGE per ogni HUD. Non
+        // si prende `max(bottom)` e `min(top)` su tutti gli elementi insieme:
+        // sotto md esiste solo l'header, e il suo `top` (0) verrebbe preso come
+        // PAVIMENTO, producendo una banda a roverscio — misurato: 96px di
+        // sovrapposizione fra card e header su 390×844. Un HUD decide se
+        // spinge il soffitto o il pavimento in base a metà della viewport in cui
+        // si trova, che è la definizione stessa di «banda libera».
+        let safeTop = 0;
+        let safeBottom = viewportBox;
+        const mid = viewportBox / 2;
+        for (const node of [headerEl, geoEl, telemetryEl]) {
+          if (!node) continue;
+          const rect = node.getBoundingClientRect();
+          // Un HUD nascosto sotto md ha rect vuoto: va ignorato, ed è quello
+          // che fa allargare da sola la banda sulle viewport strette.
+          if (rect.width <= 0 || rect.height <= 0) continue;
+          if (rect.bottom <= mid) {
+            safeTop = Math.max(safeTop, rect.bottom + safeGap);
+          } else {
+            safeBottom = Math.min(safeBottom, rect.top - safeGap);
+          }
+        }
+        const safeHeight = Math.max(120, safeBottom - safeTop);
+        // L'ALTEZZA DELLA CARD è il minimo fra la banda sicura e il rapporto
+        // della card. Il cap a 1.5× la larghezza serve oltre: senza, su una
+        // viewport molto larga le card diventerebbero altissime e uscirebbero
+        // dalla banda; con, restano proporzionate e dentro.
+        const cardHeight = Math.min(safeHeight, measuredCardWidth * CARD_MAX_HEIGHT_RATIO);
+        strip.style.setProperty('--works-card-h', `${Math.round(cardHeight)}px`);
+        // LO SPOSTAMENTO VERTICALE: le card sono centrate nella SAFE AREA fra gli
+        // HUD, non nella viewport. La banda è misurata in coordinate di
+        // VIEWPORT (gli HUD sono `fixed`), ma lo strip vive dentro la scena, che
+        // a sua volta è già traslata di `boxCenterOffset` per centrarsi fra le
+        // due etichette. Perciò il centro di riferimento non è il centro
+        // geometrico della viewport ma quello EFFETTIVO della scena: senza
+        // questa correzione le card venivano spinte indietro di quello stesso
+        // scarto e finivano dentro le etichette (misurato: 16px di
+        // sovrapposizione a 1512×780).
+        const sceneCenterY = viewportBox / 2 + boxCenterOffsetRef.current;
+        safeCenterOffsetRef.current = (safeTop + safeBottom) / 2 - sceneCenterY;
+        // IL GUTTER, misurato e non scritto.
+        //
+        // È il padding orizzontale della scena, cioè la distanza fra il bordo
+        // sinistro della Works e il bordo sinistro della prima card. Si legge
+        // dagli slot già misurati (`primo slot − mezza card`) invece che dal
+        // CSS: i due non possono divergere, perché il CSS è ciò che ha prodotto
+        // quegli slot. Da questo numero dipende l'estremo della corsa.
+        const gutterX = firstSlotX !== undefined ? firstSlotX - cardHalf : 0;
+        // NASCITA: LA PRIMA CARD È ANCORATA A SINISTRA, non al centro.
+        //
+        // Prima lo strip partiva "indietro" di mezzo slot e mezzo (`birthOffset`
+        // negativo, misurato a −510px a 1440) per portare la card 1 al centro
+        // della scena, e da lì la corsa la riportava a sinistra. Adesso la
+        // Works si apre come una parete di lavori: la prima card parte dal suo
+        // posto, con il gutter davanti, e non c'è più nessuno "indietro" da
+        // recuperare. Lo zero è il layout naturale, quindi `birthOffset` è 0 e
+        // la nascita non consuma nessuno scarto.
+        const birthOffset = 0;
+        // FINE TRACK: L'ULTIMA CARD SI FERMA AL GUTTER DESTRO.
+        //
+        // Prima `travel` portava l'ultima card al CENTRO della scena, e da lì
+        // metà schermo a destra restava vuota per tutta la coda: è la «metà
+        // destra vuota» del difetto. Ora il riferimento è il gutter destro, lo
+        // stesso numero del gutter sinistro, quindi a fine corsa il margine
+        // destro della card finale è uguale a quello della prima: la striscia
+        // finisce dove è cominciata, e non c'è buco da nessuna parte.
+        const travel = lastSlotX !== undefined
+          ? lastSlotX + cardHalf - (scene.clientWidth - gutterX)
           : 0;
-        const travel = lastSlotX !== undefined ? lastSlotX - centerX : 0;
         stripMetricsRef.current = {
           travel,
           // Uscita completa: lo strip esce interamente a sinistra quando il suo
           // bordo destro ha superato il bordo sinistro della scena.
           fullTravel: Math.max(0, stripW),
-          cardWidth: cardRefs.current[0]?.getBoundingClientRect().width ?? 0,
+          cardWidth: measuredCardWidth,
           sceneWidth: scene.clientWidth,
           birthOffset,
           raceTravel: Math.max(1, travel - birthOffset),
@@ -469,29 +561,15 @@ export default function ProjectsScene({
           };
         });
       }
-      cardRefs.current.forEach((card, index) => {
+      cardRefs.current.forEach((card) => {
         if (!card) return;
         // Rimuoviamo temporaneamente la trasformazione corrente per leggere
-        // lo slot del layout, non la posizione animata precedente.
+        // lo slot del layout, non la posizione animata precedente. L'opacità
+        // torna a 1 perché l'ingresso spegne la card: senza, il rect sarebbe
+        // quello di un elemento invisibile e la misura degli slot sarebbe
+        // quella di una Works non ancora formata.
         card.style.transform = '';
-        card.style.filter = 'none';
         card.style.opacity = '1';
-        const depthLayer = cardDepthRefs.current[index];
-        if (depthLayer) {
-          depthLayer.style.transform = '';
-          depthLayer.style.filter = 'none';
-        }
-        const blurLayer = cardBlurRefs.current[index];
-        if (blurLayer) {
-          blurLayer.style.filter = 'none';
-          blurLayer.style.opacity = '1';
-        }
-        const disc = cardDiscRefs.current[index];
-        if (disc) {
-          disc.style.width = '0px';
-          disc.style.height = '0px';
-          disc.style.opacity = '0';
-        }
       });
       setLayoutVersion((version) => version + 1);
     };
@@ -538,13 +616,8 @@ export default function ProjectsScene({
       // crescere mentre la camera ancora viaggia in Z e' cio' che lega la Works
       // alla nebulosa. Sotto questa quota non c'e' niente da disegnare.
       const cardRevealAt = nebulaTop + journeyLength * CARD_SOURCE_REVEAL_RATIO;
-      // Distanza che il viaggio offre alle card nate in anticipo, e lo stagger
-      // che ne segue. Ripristinati insieme: senza di essi le card partivano
-      // tutte insieme e la composizione si scioglieva come un blocco unico.
-      const cardTravel = Math.max(1, worksTop - cardRevealAt - CARD_FLIGHT_START_OFFSET_PX);
-      const cardCount = Math.max(1, projects.length - 1);
-      const cardStagger = cardTravel * CARD_STAGGER_RATIO / cardCount;
       const cardsVisible = y >= cardRevealAt - 1;
+      // L'OROLOGIO DELL'INGRESSO.
       // ---------------------------------------------------------------------
       // Timeline della Works: NASCITA → CORSA → SALITA → SBLOCCO
       // ---------------------------------------------------------------------
@@ -568,6 +641,13 @@ export default function ProjectsScene({
       // la striscia e il nastro resta intatto.
       const birthCeilY = worksTop + stripMetrics.sectionHeight * IN_BIRTH_END_RATIO;
       const birthEndY = Math.min(worksTop + birthSpan, birthCeilY);
+      // IL PROGRESSO DELLA NASCITA: la frazione di scroll su cui le card si
+      // aprono a ventaglio. È la sola grandezza che il ventaglio legge, ed è
+      // una funzione diretta dei pixel di scroll: nessun orologio, nessuno stato
+      // accumulato, e il ritorno è lo stesso moto letto al contrario.
+      // Fuori dalla sezione il valore è 0 (card chiuse) o 1 (card aperte), quindi
+      // il moto è chiuso anche prima e dopo.
+      const birthProgress = clamp01((y - worksTop) / birthSpan);
       const raceEndY = birthEndY + raceSpan;
       const riseEndY = raceEndY + riseSpan;
 
@@ -629,7 +709,13 @@ export default function ProjectsScene({
         sceneRise = viewportHeight + Math.max(0, y - riseEndY);
       }
       if (stripRef.current) {
-        stripRef.current.style.transform = `translate3d(${-stripOffset.toFixed(2)}px, 0, 0)`;
+        // La Y non è 0: è lo scarto che centra le card nella SAFE AREA fra gli
+        // HUD. Le card stanno centrate lì dentro, non nello schermo, e senza
+        // questo scarto tornerebbero a toccare l'etichetta più bassa. Lo scarto
+        // è misurato in `measureSlots` e vale 0 se gli HUD non esistono.
+        const safeY = safeCenterOffsetRef.current;
+        stripRef.current.style.transform =
+          `translate3d(${-stripOffset.toFixed(2)}px, ${safeY.toFixed(2)}px, 0)`;
         // !== 0 e non > 0: birthOffset è NEGATIVO (lo strip parte indietro di
         // mezzo slot e mezzo per portare la card 1 al centro), quindi il test
         // positivo lo lasciava a 'auto' proprio mentre la Works è ferma a
@@ -712,241 +798,116 @@ export default function ProjectsScene({
           const sceneRect = sceneRef.current?.getBoundingClientRect();
           return rect.left - (sceneRect?.left ?? 0) + rect.width / 2;
         })();
-        const restCenterY = slot?.y ?? (() => {
-          const rect = card.getBoundingClientRect();
-          const sceneRect = sceneRef.current?.getBoundingClientRect();
-          return rect.top - (sceneRect?.top ?? 0) + rect.height / 2;
-        })();
-        // Posizione CORRENTE della card: lo slot a riposo meno lo scorrimento
-        // dello strip. E' da qui che si misura la distanza dal punto di fuga.
-        const finalCenterX = restCenterX - stripOffset;
-        const finalCenterY = restCenterY;
-
-        // Finestra di nascita: IL NASTRO, una card per step.
+        // L'ingresso della card è in tempo e non in scroll, quindi qui non
+        // serve nessuna posizione "corrente": la card sta al suo slot e da lì
+        // viene tirata dentro. `restCenterX` basta, e serve più sotto per
+        // l'uscita a sinistra.
+        // L'INGRESSO: da fuori bordo destro, con stagger, in TEMPO.
         //
-        //  - la card 1 vola nella fase di NASCITA, con lo strip fermo: e' sola
-        //    al centro e non ha nessuna card davanti da cui spingersi.
-        //  - le altre cinque volano una per step della corsa: la card i nasce
-        //    quando atterra la card i-1 e atterra quando nasce la card i+1.
+        // Non c'è più la planata né il nastro: nessuna profondità, nessuna
+        // scala da un punto centrale, nessuna card che nasce al centro per poi
+        // farsi spingere a sinistra. Ogni card è già al suo slot (lo strip le
+        // mette in fila) e l'unica cosa che la fa entrare è un offset orizzontale
+        // che la tiene fuori campo e la porta al posto.
         //
-        // Ogni volo copre quindi esattamente 1/(card-1) della corsa, e i voli
-        // NON si sovrappongono: c'e' sempre una sola card in aria, e quella
-        // appena atterrata e' al centro mentre la nuova le cresce dentro. Non e'
-        // una scelta estetica ma la conseguenza di due requisiti insieme: la
-        // card i nasce al centro (punto occupato dalla card i-1, quindi la nuova
-        // esce DA DIETRO) e ogni nuova card spinge le precedenti di uno step.
-        // Con voli sovrapposti due card sarebbero in aria insieme e si
-        // incrocerebbero proprio sul centro.
-        // Piano di volo. Nella NASCITA lo strip è FERMO, quindi lo scroll è
-        // già la grandiezza giusta e il volo si legge su di esso. Nella CORSA
-        // invece si legge in RACE PROGRESS, la posizione lineare normalizzata
-        // dello strip: lì la finestra di volo e il moto dello strip sono la
-        // stessa grandiezza, e l'atterraggio è esatto per costruzione.
+        // IL VENTAGLIO DAL CENTRO.
         //
-        // `voloIniziato` è la stessa condizione in entrambi i rami, perché la
-        // soglia di visibilità della card più in basso deve coincidere con
-        // l'inizio del volo: se le due grandezze divergessero, la card
-        // apparirebbe come disco bokeh prima di partire, o resterebbe invisibile
-        // dopo aver iniziato.
-        let voloIniziato: boolean;
-        let flight: number;
-        if (index === 0) {
-          // NASCITA, con due estremi. La card 1 parte dal punto di fuga dentro
-          // la nebulosa, al 45% del viaggio Nebula → Works, e atterra a
-          // birthEndY. Non parte da worksTop: così durante l'esplosione delle
-          // particelle si vede già il disco che sta per diventare card, e la
-          // Works accoglie una card a metà formazione invece di una griglia già
-          // perfetta che non spiega da dove venga. L'atterraggio resta a
-          // birthEndY, quindi il nastro e i suoi 5 step non cambiano.
-          //
-          // CARD_FLIGHT_START_OFFSET_PX: il disco sorgente e' gia' visibile da
-          // cardRevealAt, quindi il contenuto parte un filo dopo, non insieme.
-          const birthStart =
-            cardRevealAt + (worksTop - cardRevealAt) * IN_BIRTH_START_RATIO;
-          const flightStartY = birthStart + CARD_FLIGHT_START_OFFSET_PX;
-          const flightEndY = birthEndY;
-          voloIniziato = y >= flightStartY - 1;
-          flight = clamp01(
-            (y - flightStartY) / Math.max(1, flightEndY - flightStartY),
-          );
-        } else {
-          // Un volo per step, misurato sulla corsa e non sulla sezione:
-          // index 1 occupa [0, 1/5], index 5 occupa [4/5, 1].
-          const steps = Math.max(1, projects.length - 1);
-          const from = (index - 1) / steps;
-          const to = index / steps;
-          // CARD_ENTRY_MARGIN_PX tiene il punto sorgente DENTRO lo schermo
-          // quando il volo parte: a quest'altezza la card e' un disco di pochi
-          // pixel, e se il centro sorgente stasse oltre il bordo durante la
-          // crescita si vedrebbe il disco rientrare dal nulla invece di essere
-          // gia' li' che si allarga. Se la sorgente non e' ancora in campo lo
-          // stagger non serve: la card entra comunque piu' tardi, quando la
-          // corsa la porta dentro, e un ritardo la lascerebbe sporgere dal bordo.
-          const cardHalf = stripMetrics.cardWidth / 2;
-          const sourceVisible =
-            finalCenterX - cardHalf - CARD_ENTRY_MARGIN_PX <= stripMetrics.sceneWidth;
-          // Il ritardo e' in px di scroll e viene portato in raceProgress con
-          // la velocita' di CROCIERA, cosi' vale lo stesso numero di px di
-          // prima. Il denominatore si riduce dello stesso ritardo: la finestra
-          // si accorcia da sinistra e NON si sposta, quindi flight = 1 arriva
-          // esattamente a raceProgress = to e l'atterraggio non si muove. Il
-          // denominatore resta positivo per costruzione (i voli restano
-          // disgiunti anche col ritardo: il nastro non si spacca).
-          const ritardo = sourceVisible
-            ? (index * cardStagger) / ((1 - RACE_RAMP_RATIO) * raceSpan)
-            : 0;
-          const ampiezza = Math.max(1e-6, to - from - ritardo);
-          voloIniziato = raceProgress >= from + ritardo;
-          flight = clamp01((raceProgress - from - ritardo) / ampiezza);
-        }
-        // Planata nello scroll: la dimensione cresce con una curva a potenza
-        // (parte da un punto, accelera al centro, si posa alla fine), mentre la
-        // profondità e il fuori fuoco restano quelli di una camera.
-        const growth = Math.pow(flight, CARD_GROWTH_EXPONENT);
-        const sizeFactor = CARD_POINT_SCALE + (1 - CARD_POINT_SCALE) * growth;
-        const seed = Math.sin(index * 19.17 + 4.2) * 43758.5453;
-        const seedUnit = seed - Math.floor(seed);
-        // Tutte le card nascono dal vero perspectiveOrigin della scena Works.
-        // La divergenza avviene quindi lungo raggi prospettici reali, senza
-        // ereditare il moto verticale della sezione che scorre sotto.
-        // La sorgente nasce dal vero perspectiveOrigin della scena Works, letto
-        // in coordinate LOCALI: è lo stesso punto attorno a cui il CSS proietta,
-        // quindi l'origine coincide con la posizione schermo della card a
-        // riposo e il punto di fuga cade dove l'utente lo vede. Con lo strip in
-        // movimento questo punto si sposta a ogni frame, ed è la ragione per cui
-        // si usa finalCenterX (posizione corrente) e non quella a riposo.
-        const origin = perspectiveOriginRef.current;
-        const opticalCenterX = origin.x > 0
-          ? origin.x
-          : document.documentElement.clientWidth / 2;
-        const opticalCenterY = origin.y > 0
-          ? origin.y
-          : window.innerHeight / 2;
-        // Tutte le sorgenti nascono dallo stesso punto di fuga prospettico.
-        // Non aggiungiamo jitter o bend: la divergenza verso gli slot avviene
-        // lungo la traiettoria radiale della singola card.
-        const originX = opticalCenterX - finalCenterX;
-        const originY = opticalCenterY - finalCenterY;
-        const depth = CARD_START_DEPTH * (1 - flight) *
-          (1 + (seedUnit - 0.5) * CARD_DEPTH_JITTER);
-        // Proiezione prospettica della card: scala locale × divide della
-        // perspective del contenitore. Serve anche al blur, che è locale.
-        const projection = sizeFactor *
-          (CARD_PERSPECTIVE_PX / (CARD_PERSPECTIVE_PX + depth));
-        // Messa a fuoco: la card si risolve solo nella coda del volo, mentre il
-        // disco bokeh la rappresenta da lontano.
-        const focus = smoothstep(clamp01(
-          (flight - CARD_FOCUS_START) / (CARD_FOCUS_END - CARD_FOCUS_START),
-        ));
-        const screenBlur = CARD_COC_SCREEN_PX * Math.pow(1 - focus, 1.4);
-        const localBlur = Math.min(
-          CARD_MAX_LOCAL_BLUR_PX,
-          screenBlur / Math.max(projection, 0.05),
-        );
-        const discScreen = CARD_DISC_MIN_PX +
-          (CARD_DISC_MAX_PX - CARD_DISC_MIN_PX) *
-            smoothstep(clamp01(flight / 0.55));
-        const discLocal = discScreen / Math.max(projection, 0.05);
-        const discOpacity = CARD_DISC_ALPHA *
-          (CARD_DISC_INITIAL_ALPHA +
-            (1 - CARD_DISC_INITIAL_ALPHA) *
-              smoothstep(clamp01(flight / CARD_DISC_FADE_IN))) *
-          (1 - focus);
-        // Fattore di proiezione della scena: k = perspective / (perspective + depth).
-        // Cresce da ~0.56 a 1.0 durante il volo, quindi la posizione LOCALE
-        // applicata non coincide con quella a schermo: senza compensazione la
-        // traiettoria risultava curva, con scarto misurato fino a 56px a meta volo.
-        const perspectiveK = CARD_PERSPECTIVE_PX / (CARD_PERSPECTIVE_PX + depth);
-        // Dividere per k riporta la traiettoria a schermo su quella disegnata.
-        const positionProgress = smoothstep(flight) / Math.max(perspectiveK, 0.05);
-        const positionX = originX * (1 - positionProgress);
-        const positionY = originY * (1 - positionProgress);
-        // ---------------------------------------------------------------------
-        // LA TRAIETTORIA
-        // ---------------------------------------------------------------------
-        // Un solo percorso per tutte e sei: la retta dal punto di fuga allo slot
-        // corrente, compensata di 1/k dalla proiezione prospettica. A flight = 0
-        // vale positionX = originX, cioe' la card nasce LETTERALMENTE dal centro.
+        // Il moto è il PROGRESSO DELLA FASE DI NASCITA, cioè la porzione di
+        // scroll in cui lo strip è fermo. Non c'è nessun orologio: la stessa
+        // funzione che apre le card le richiude riscorrendo, quindi il ritorno è
+        // speculare per costruzione e non per una simmetria scritta a mano.
         //
-        // Non c'e' piu' nessun termine di escape: esisteva per non far passare la
-        // card per il centro, ma adesso il centro e' occupato di proposito - e'
-        // li' che atterra la card precedente e da li' la nuova esce dietro.
-        // escapeX resta 0 e resta pubblicato in telemetria per poterlo
-        // verificare a misura invece di dedurlo dai rect.
-        const escapeX = 0;
-        const complete = flight >= 0.999;
-        const depthLayer = cardDepthRefs.current[index];
-        const blurLayer = cardBlurRefs.current[index];
-        const disc = cardDiscRefs.current[index];
-        card.style.opacity = '1';
-        // La card è visibile solo per la sua finestra di nascita. Prima che il
-        // volo cominci resterebbe un dischetto fermo al punto di fuga, dove si
-        // sovrapporrebbe a quello delle card che nascono dopo: senza questo
-        // controllo, allo stop Works si vedrebbe un unico punto con tre card
-        // sovrapposte invece del solo bokeh di quella che sta davvero arrivando.
+        // Lo STAGGER è la frazione di finestra che ogni card lascia alle
+        // precedenti. Le carte si aprono da SINISTRA a DESTRA, che è l'ordine
+        // in cui sono negli slot, e la finestra utile si restringe di conseguenza
+        // per farle finire tutte entro la nascita: se l'ultima card partisse
+        // dopo la fine della fase, il track inizierebbe a scorrere con le carte
+        // ancora chiuse — ed è esattamente quello che succedeva contando i
+        // ritardi sui PROGETTI (6) invece che sulle CARD (7): l'ultimo ritardo
+        // superava 1 e quella card non si apriva mai.
         //
-        // Nella salita e nello sblocco vale l'altro estremo: la card esce a
-        // sinistra insieme allo strip e la scena sale, quindi quando e' finita
-        // oltre il bordo sinistro (o quando la scena e' uscita del tutto) non
-        // deve piu' essere disegnata. Senza questo le card resterebbero
-        // visibili mentre la scena esce, e si sovrapporrebbero alla sezione
-        // dopo.
+        // L'ultima card chiude esattamente a fine finestra: il suo ritardo più la
+        // sua finestra deve fare 1, ed è quello che dà `fanWindow`.
+        const cardCount = Math.max(1, cardRefs.current.length);
+        const staggerStep = CARD_FAN_STAGGER_RATIO;
+        const staggerSpan = staggerStep * Math.max(0, cardCount - 1);
+        const fanDelay = index * staggerStep;
+        const fanWindow = Math.max(0.05, 1 - staggerSpan);
+        const fanT = clamp01((birthProgress - fanDelay) / fanWindow);
+        const fanEased = cardFanEase(fanT);
+        // LA ROTAZIONE INIZIALE è fissa per card, non casuale a ogni frame: un
+        // `Math.random` qui farebbe tremare la composizione e romperebbe il
+        // ritorno speculare. Il seed deriva dall'indice, quindi la stessa card ha
+        // sempre la stessa inclinazione e il segno è alternato: si legge come un
+        // mazzo di carte, non come un errore di arrotondamento.
+        const fanSeed = Math.sin(index * 12.9898) * 43758.5453;
+        const fanSeedUnit = fanSeed - Math.floor(fanSeed);
+        const fanStartRot = (index % 2 === 0 ? 1 : -1) * CARD_FAN_ROTATION * (0.55 + fanSeedUnit * 0.45);
+        // IL CENTRO DI PARTENZA è il centro della scena, cioè della viewport:
+        // tutte le card partono impilate lì, e da lì ognuna raggiunge il proprio
+        // slot. La traslazione è calcolata sullo slot corrente, così la mazzetta
+        // resta al centro anche mentre lo strip è già in parte scorsso.
+        const fanCenterX = stripMetrics.sceneWidth / 2;
+        const fanDx = (1 - fanEased) * (fanCenterX - restCenterX);
+        const fanScale = CARD_FAN_START_SCALE + (1 - CARD_FAN_START_SCALE) * fanEased;
+        const fanRot = (1 - fanEased) * fanStartRot;
+        // CON MOVIMENTO RIDOTTO: solo dissolvenza, niente ventaglio. Le card
+        // appaiono già ai loro posti e si accendono: è la via che chiede la
+        // specifica, e mantiene l'unico moto ammesso — l'opacità.
+        const fanVisible = reducedMotion ? clamp01(birthProgress / 0.35) : fanEased;
+        const fanDxUsed = reducedMotion ? 0 : fanDx;
+        const fanScaleUsed = reducedMotion ? 1 : fanScale;
+        const fanRotUsed = reducedMotion ? 0 : fanRot;
+        // La card è visibile solo mentre le tocca: lungo il track esce a
+        // sinistra, e nella salita/sblocco la scena sale fuori campo.
         const slotOnScreen = restCenterX - stripOffset;
         const onScreen = slotOnScreen + cardHalf >= 0 && slotOnScreen - cardHalf <= stripMetrics.sceneWidth;
-        card.style.visibility =
-          voloIniziato && onScreen && riseRatio < 0.999 ? 'visible' : 'hidden';
-        // Una card in volo occupa comunque tutta la sua box 360px: anche quando
-        // e' solo un disco bokeh di 22px al punto di fuga, se restasse cliccabile
-        // ruberebbe i click alle card gia' composte che gli stanno dietro
-        // (misurato: il click sul centro della card 1 finiva sulla card 3).
+        card.style.visibility = onScreen && riseRatio < 0.999 ? 'visible' : 'hidden';
+        // LA SFUMATURA IN USCITA.
         //
-        // La soglia e' sulla POSIZIONE, non sulla curva di focus: quello che
-        // distingue una card cliccabile da una che ruba i click e' l'aver
-        // lasciato il punto di fuga, non la nitidezza. Con la curva di focus la
-        // card 2 risultava gia' nitida e composta ma non cliccabile.
-        card.style.pointerEvents = positionProgress >= 0.5 ? 'auto' : 'none';
-        // willChange si commuta UNA volta per card, all'atterraggio: si scrive
-        // solo allora (vedi landedRef).
+        // Durante la corsa orizzontale le card che escono a sinistra non
+        // spariscono di colpo al bordo: si spengono mentre lo attraversano. La
+        // finestra è l'ultima CARD_EXIT_FADE_SPAN mezza card di schermo, e il
+        // minimo non è 0 ma CARD_EXIT_FADE_MIN: la card che ha già superato il
+        // bordo resta accennata invece di accendersi e spegnersi a intermittenza
+        // davanti all'occhio. Il valore minimo esiste per quello, non per
+        // risparmiare un canale alpha.
+        //
+        // È funzione del SOLO `stripOffset`: nessun orologio e nessuna memoria,
+        // quindi riscorrere la corsa all'indietro riaccende ogni card
+        // esattamente nel punto in cui si era spenta.
+        const exitT = clamp01(slotOnScreen / Math.max(1, cardHalf * CARD_EXIT_FADE_SPAN));
+        const exitFade = CARD_EXIT_FADE_MIN + (1 - CARD_EXIT_FADE_MIN) * exitT;
+        // L'opacità finale è il PRODOTTO dei due fattori, non una media: finché
+        // la card non è entrata non c'è niente da sfumare, e una volta entrata
+        // non c'è più niente da accendere. Moltiplicare tiene le due condizioni
+        // indipendenti — con una media, una card a metà ingresso che esce a
+        // sinistra tornerebbe visibile per un istante.
+        card.style.opacity = String(fanVisible * exitFade);
+        // Il click è legato alla POSIZIONE e non alla curva di focus: ciò che
+        // distingue una card cliccabile da una che ruberebbe i click alle
+        // vicine è l'aver lasciato il bordo, non la nitidezza.
+        card.style.pointerEvents = exitT > 0.02 ? 'auto' : 'none';
+        // Il ventaglio è finito quando la card è al suo slot: da lì `willChange`
+        // torna ad 'auto' e il browser libera il livello di composizione che il
+        // moto si era tenuto. Scritto una volta per card, non ogni frame.
+        const complete = fanT >= 1;
         if (landedRef.current[index] !== complete) {
           landedRef.current[index] = complete;
           card.style.willChange = complete ? 'auto' : 'transform';
-          if (depthLayer) depthLayer.style.willChange = complete ? 'auto' : 'transform';
-          if (blurLayer) {
-            blurLayer.style.willChange = complete ? 'auto' : 'filter, opacity';
-          }
         }
-        // Non azzeriamo lo stile al completamento: già a flight=1 i valori
-        // sono identici al layout naturale, quindi il passaggio resta continuo.
-        // L'escape entra qui, sommato alla posizione della retta: a flight 1
-        // vale 0 e la card è già al centro del suo box, quindi la posizione
-        // finale è la stessa delle due famiglie.
-        card.style.transform = `translate3d(${(positionX + escapeX).toFixed(2)}px, ${positionY.toFixed(2)}px, 0)`;
-        // Telemetria di traiettoria in dev: i due termini che separano le
-        // famiglie (retta compensata + escape) e il volo, così le verifiche
-        // headless possono controllarli senza ricavarli da una stima.
-        trajTelemetry[index] = { flight, positionX, escapeX, positionY, k: perspectiveK };
-        if (depthLayer) {
-          // Manteniamo anche a flight=1 una trasformazione esplicita e
-          // coincidente con il layout naturale: evita il reset di stile che
-          // faceva ricomparire la griglia nell'ultimo frame.
-          depthLayer.style.opacity = '1';
-          depthLayer.style.transform = `translate3d(0, 0, ${(-depth).toFixed(2)}px) scale(${sizeFactor.toFixed(5)}) rotateX(${((seedUnit - 0.5) * 9 * (1 - flight)).toFixed(3)}deg) rotateY(${((0.5 - seedUnit) * 7 * (1 - flight)).toFixed(3)}deg)`;
-        }
-        if (blurLayer) {
-          blurLayer.style.opacity = String(focus);
-          blurLayer.style.filter = localBlur > 0.12
-            ? `blur(${localBlur.toFixed(2)}px) saturate(1.08)`
-            : 'none';
-        }
-        if (disc) {
-          // SCALA e non width/height: vedi CARD_DISC_BASE_PX. Il gradiente
-          // radiale è definito in percentuale della box, quindi riscala
-          // insieme all'elemento e il disco resta identico a occhio.
-          const discScale = complete ? 0 : discLocal / CARD_DISC_BASE_PX;
-          disc.style.transform =
-            `translate(-50%, -50%) scale(${discScale.toFixed(4)})`;
-          disc.style.opacity = complete ? '0' : discOpacity.toFixed(3);
-        }
+        // A `fanT = 1` traslazione e rotazione sono 0 e la scala è 1: la card è
+        // esattamente nel suo slot, quindi si azzera lo stile e la trasformazione
+        // sparisce senza discontinuità.
+        card.style.transform = complete
+          ? ''
+          : `translate3d(${fanDxUsed.toFixed(2)}px, 0, 0) rotate(${fanRotUsed.toFixed(3)}deg) scale(${fanScaleUsed.toFixed(4)})`;
+        // Telemetria in dev: lo stato di ventaglio di questa card in questo
+        // frame, per le verifiche headless.
+        trajTelemetry[index] = {
+          fanT, fanDx: fanDxUsed, fanRot: fanRotUsed, fanScale: fanScaleUsed,
+          opacity: fanVisible * exitFade, exitFade,
+        };
       });
 
       // La telemetria si pubblica a FINE loop: dentro il forEach è ancora in
@@ -985,12 +946,21 @@ export default function ProjectsScene({
           testo fuori dalle card. La vecchia riga [06 PROJECTS] e' stata
           eliminata insieme al suo codice di animazione. */}
       {/* flex in riga: lo strip prende l'altezza disponibile e centra le card,
-          lo spacer assorbe la larghezza eccedente. Il padding orizzontale a
-          md+ è 60px = un gap esatto: così la prima card ha il centro a 210px
-          (60 + 300/2) e la composizione di tre card parte da un bordo pulito
-          invece di affacciare la prima card al filo dello schermo. Sotto md
-          resta px-4 perché a quella larghezza 60px mangerebbe troppa striscia. */}
-      <div className="relative z-10 flex-1 flex overflow-visible px-4 md:px-[60px]">
+          lo spacer assorbe la larghezza eccedente.
+
+          Il padding laterale è `--page-gutter`, lo stesso token del marchio
+          dell'header, della coppia geografica in alto a destra e della
+          telemetria in basso a sinistra. Prima era un `md:px-[60px]` scritto a
+          mano: le card partivano da un filo diverso da quello degli altri elementi
+          della pagina, e in più il valore era fermo mentre il gutter cresce con
+          la viewport. Leggendo il token, la prima card parte dalla stessa
+          griglia di tutto il resto — che è anche il motivo per cui a fine track
+          l'ultima card si ferma con lo stesso margine: `travel` in
+          `measureSlots` è calcolato su questo stesso numero. */}
+      <div
+        className="relative z-10 flex-1 flex overflow-visible"
+        style={{ paddingLeft: 'var(--page-gutter)', paddingRight: 'var(--page-gutter)' }}
+      >
         {/* STRIP: la fila orizzontale delle card. Lo scroll verticale comanda il
             suo spostamento in X (impostato nel render loop), quindi non c'e' uno
             overflow orizzontale nativo: nessuna barra di scorrimento laterale e
@@ -1019,7 +989,7 @@ export default function ProjectsScene({
               // layer, disco, blur layer) hanno anch'essi classi di layout, quindi
               // un selettore per classe li conterrebbe insieme a lei.
               data-card-root={index}
-              className="shrink-0"
+              className="works-card-shell shrink-0"
               style={{
                 flex: '0 0 var(--works-card-w)',
                 // minWidth 0 disattiva la dimensione minima automatica del flex
@@ -1045,56 +1015,56 @@ export default function ProjectsScene({
                 zIndex: projects.length - index,
               }}
             >
-              <div
-                ref={(element) => {
-                  cardDepthRefs.current[index] = element;
-                }}
-                className="relative h-full w-full aspect-[3/4]"
-                style={{
-                  opacity: 0,
-                  transformOrigin: '50% 50%',
-                  transformStyle: 'preserve-3d',
-                  willChange: 'transform',
-                }}
-              >
-                {/* Disco bokeh: è la card quando è lontana. Sta dentro la depth
-                    layer, quindi eredita la stessa proiezione della card (il
-                    centro resta sempre coincidente) ma non il suo blur. */}
-                <span
-                  ref={(element) => {
-                    cardDiscRefs.current[index] = element;
-                  }}
-                  aria-hidden="true"
-                  data-card-bokeh={index}
-                  className="pointer-events-none absolute left-1/2 top-1/2 rounded-full"
-                  style={{
-                    width: CARD_DISC_BASE_PX,
-                    height: CARD_DISC_BASE_PX,
-                    opacity: 0,
-                    backgroundImage: CARD_BOKEH_GRADIENT,
-                    transform: 'translate(-50%, -50%)',
-                  }}
+              {/* La card è un solo elemento ora: niente depth layer, niente disco
+                  bokeh, niente blur layer. Esistevano per la planata — la card
+                  che cresceva da un punto centrale diventando prima un disco
+                  sfocato e poi nitida. Con l'ingresso da fuori bordo destro non
+                  c'è più nessuna profondità da simulare: la card entra già nella
+                  sua dimensione finale, e un disco bokeh al centro dello schermo
+                  sarebbe proprio il difetto che si sta correggendo. Il wrapper
+                  serve solo a fissare l'aspect 3:4 ereditato dalle card vere. */}
+              <div className="relative h-full w-full">
+                <ProjectCard
+                  project={project}
+                  index={index}
+                  onOpen={() => onOpenProject(index)}
                 />
-                <div
-                  ref={(element) => {
-                    cardBlurRefs.current[index] = element;
-                  }}
-                  className="h-full w-full"
-                  style={{
-                    opacity: 0,
-                    transformOrigin: '50% 50%',
-                    willChange: 'filter, opacity',
-                  }}
-                >
-                  <ProjectCard
-                    project={project}
-                    index={index}
-                    onOpen={() => onOpenProject(index)}
-                  />
-                </div>
               </div>
             </div>
           ))}
+          {/* L'ULTIMA CARD: «+», uno slot vuoto.
+              Non sta dentro `projects` perché NON è un progetto: non ha codice,
+              anno, cliente, tag, kpi né brief, e inventarli per farlo entrare
+              nello stesso array avrebbe finito per mostrare dati falsi in un
+              elenco che legge davvero da Sanity. Renderizzata qui, dopo la mappa,
+              eredita comunque tutto quello che conta: la larghezza (la stessa
+              `flex`), il gap, e soprattutto l'ingresso da fuori bordo destro,
+              perché anche lei riceve un ref in `cardRefs` e viene quindi
+              animata dal render loop come le altre. */}
+          <div
+            ref={(element) => {
+              cardRefs.current[projects.length] = element;
+            }}
+            data-card-root={projects.length}
+            data-card-role="add"
+            className="works-card-shell shrink-0"
+            style={{
+              flex: '0 0 var(--works-card-w)',
+              minWidth: 0,
+              opacity: 0,
+              visibility: 'hidden',
+              transformOrigin: '50% 50%',
+              willChange: 'transform',
+              // z-index 0: sta in fondo a tutte, e non per umiltà ma per
+              // correttezza — è l'ultima della corsa, quindi è l'unica che non
+              // ha nessuna card davanti da cui uscire.
+              zIndex: 0,
+            }}
+          >
+            <div className="relative h-full w-full">
+              <AddProjectCard />
+            </div>
+          </div>
         </div>
         {/* Lo spacer tiene larga la scena quanto la viewport: senza di lui il
             prospettiva del CSS si riferirebbe a una scena larga tutta la

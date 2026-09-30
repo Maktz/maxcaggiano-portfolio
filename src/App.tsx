@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AnimatePresence,
   motion,
+  useMotionValue,
   useMotionValueEvent,
   useTransform,
 } from 'framer-motion';
@@ -15,15 +16,18 @@ import NebulaScene from '@/components/NebulaScene';
 import ProjectsScene from '@/components/ProjectsScene';
 import ContactScene from '@/components/ContactScene';
 import ProjectModal from '@/components/ProjectModal';
+import AddProjectModal from '@/components/AddProjectModal';
 import { useMagnetStages } from '@/hooks/useMagnetStages';
 import { useSmoothScroll } from '@/providers/smoothScrollContext';
 import {
   clamp01,
   phase,
   readSceneTop,
-  smoothstep,
 } from '@/lib/scrollMath';
 import { isSkipEntry } from '@/lib/entryState';
+import { reducedMotion } from '@/lib/motionPreference';
+import { onHeroReady, registerHeroNavigation, clearHeroNavigation } from '@/lib/heroEntryControl';
+import { registerAddProjectModal, clearAddProjectModal } from '@/lib/addProjectControl';
 import { lockScroll } from '@/lib/scrollLock';
 import { useProjects } from '@/hooks/useProjects';
 import { COORD_MILANO, COORD_POTENZA, COORD_VIA_LATTEA } from '@/lib/entryCopy';
@@ -72,6 +76,26 @@ export default function App() {
   // Sorgente unica di verità: la posizione fluida di Lenis, non il
   // window.scrollY nativo. Tutte le scene ricevono questi stessi valori.
   const { scrollY, lenis } = useSmoothScroll();
+  // "LA PRIMA PAGINA E' COMPLETA", come MotionValue e non come stato React perche'
+  // la consumano piu' scene e va letta a ogni frame senza provocare un render: e'
+  // lo stesso tipo di dato che porta gia' `scrollY`.
+  //
+  // E' il ponte fra lo stato d'ingresso (un modulo, con un semplice booleano) e
+  // l'opacita' delle coordinate, che ne e' una funzione. Il booleano vive in
+  // `entryState` e questa MotionValue ne e' l'unica proiezione: due copie dello
+  // stesso dato potrebbero divergere, e il sintomo sarebbe di nuovo coordinate
+  // e avatar che non coincidono.
+  const heroReady = useMotionValue(0);
+  useEffect(() => onHeroReady(() => heroReady.set(1)), [heroReady]);
+  // Il marchio dell'header, che quando e' a posto e' lo stesso ritratto dell'hero,
+  // torna alla prima pagina. Lo scroll lo sa fare solo chi possiede Lenis, quindi
+  // e' la pagina a pubblicarlo e l'header a chiamarlo.
+  useEffect(() => {
+    registerHeroNavigation(() => {
+      lenis.scrollTo(readSceneTop('hero'), { immediate: reducedMotion });
+    });
+    return clearHeroNavigation;
+  }, [lenis]);
   // Segnale di 'posizionamento gia' fatto' per l'ingresso diretto (?skip).
   // Vive in una ref perche' deve sopravvivere al doppio montaggio di
   // StrictMode: con uno useState, il cleanup del primo effetto azzererebbe il
@@ -167,15 +191,45 @@ export default function App() {
   const handleOpenProject = useCallback((index: number) => setActiveProject(index), []);
   const handleCloseProject = useCallback(() => setActiveProject(null), []);
 
-  // Coppia geografica: entra sull'ingresso dell'Hero (il fade e' sulla coda del
-  // preloader) e resta per tutta la pagina, Works e Transmission incluse: e'
-  // l'unico riferimento geografico del sito, quindi non ha senso farla sparire.
-  const geoOpacity = useTransform(scrollY, (value) => {
-    const hero = document.querySelector<HTMLElement>('[data-scene="hero"]');
-    if (!hero) return 0;
-    const lead = hero.offsetHeight * 0.12;
-    return smoothstep(phase(value, hero.offsetTop - lead, hero.offsetTop));
-  });
+  // IL MODAL «AGGIUNGI IL TUO PROGETTO».
+  //
+  // `origin` è il rettangolo della card al momento del click, e viene conservato
+  // in uno stato invece di essere passato al momento del render: se il rect
+  // arrivasse già calcolato nel JSX, al secondo render del dialog il pannello
+  // ripartirebbe da una card che nel frattempo si è mossa con lo strip, e il
+  // FLIP mostrerebbe uno stacco. Qui si congela il rettangolo del click e si
+  // usa quello per tutta l'apertura e la chiusura.
+  const [addProjectOrigin, setAddProjectOrigin] = useState<DOMRect | null>(null);
+  const [isAddProjectOpen, setIsAddProjectOpen] = useState(false);
+  const handleOpenAddProject = useCallback((origin: DOMRect | null) => {
+    setAddProjectOrigin(origin);
+    setIsAddProjectOpen(true);
+  }, []);
+  const handleCloseAddProject = useCallback(() => setIsAddProjectOpen(false), []);
+
+  // La card «+» chiama una funzione globale e non conosce il modal: il ponte è
+  // `addProjectControl`, ed è registrato qui perché questo è l'unico posto che
+  // sa quando il dialog può esistere. Il cleanup allo smontamento evita che un
+  // opener punti a un componente già smontato — condizione che su una rotta con
+  // HMR si verifica ed è la ragione per cui lo stub esisteva separato.
+  useEffect(() => {
+    registerAddProjectModal(handleOpenAddProject);
+    return () => clearAddProjectModal();
+  }, [handleOpenAddProject]);
+
+  // Coppia geografica: entra sull'ingresso dell'Hero e resta per tutta la pagina,
+  // Works e Transmission incluse: e' l'unico riferimento geografico del sito,
+  // quindi non ha senso farla sparire.
+  //
+  // L'opacita' NON e' piu' una funzione dello scroll. Prima lo era, ancorata a
+  // `heroTop - lead`, e a scroll 0 — la posizione di riposo dopo il preloader e
+  // il punto in cui il magnete riporta la pagina al ritorno dalla Works — dava 0:
+  // le coordinate sparivano al ritorno dalla sezione lavori mentre titolo e
+  // sottotitolo restavano, perche' quelli vivono in un contenitore `fixed` e non
+  // dipendono dalla posizione. Era la stessa causa dell'avatar che spariva, e
+  // la correzione e' la stessa: la visibilita' la decide lo STATO dell'ingresso
+  // (`heroReady`), non la quota di pagina.
+  const geoOpacity = useTransform([scrollY, heroReady], ([, ready]) => ready);
 
   // Telemetria: la posizione si scioglie dalla Via Lattea alla Terra mentre si
   // attraversa la nebulosa. Finestra ancorata agli stop reali (fine dello SVG ->
@@ -192,12 +246,9 @@ export default function App() {
   // a meta' percorso, dentro lo stesso testo. Prima le due etichette erano due
   // span sovrapposti con opacita' complementari: a meta' scorrimento nessuna
   // delle due era piena, e quel passaggio si leggeva come un fade.
-  const telemetryOpacity = useTransform(scrollY, (value) => {
-    const hero = document.querySelector<HTMLElement>('[data-scene="hero"]');
-    if (!hero) return 0;
-    const lead = hero.offsetHeight * 0.12;
-    return smoothstep(phase(value, hero.offsetTop - lead, hero.offsetTop));
-  });
+  // Stessa sorgente del blocco geografico — lo stato dell'ingresso — per lo
+  // stesso motivo e con le stesse conseguenze al ritorno dalla Works.
+  const telemetryOpacity = useTransform([scrollY, heroReady], ([, ready]) => ready);
   // I numeri si interpolano scrivendo direttamente textContent: un setState per
   // frame farebbe un render di React a ogni frame dello scroll, e qui il valore
   // cambia a ogni pixel.
@@ -362,6 +413,24 @@ export default function App() {
           <ProjectModal project={projects[activeProject]} onClose={handleCloseProject} />
         )}
       </AnimatePresence>
+      {/* Il modal «Aggiungi il tuo progetto». Va in un `AnimatePresence` suo e
+          non dentro quello dei progetti: i due dialog non possono coesistere
+          (l'uno occupa lo schermo con il form, l'altro mostra un case study),
+          e metterli nello stesso contenitore farebbe uscire l'uno quando si
+          apre l'altro. */}
+      {/* Il modal «Aggiungi il tuo progetto». NON è dentro un
+          `AnimatePresence`: la sua chiusura la guida il componente stesso, che
+          rientra nel rettangolo della card e solo alla fine avvisa il genitore
+          di potersi smontare. Se lo smontaggio fosse di AnimatePresence il
+          pannello verrebbe tolto dall'albero al primo frame e l'uscita non si
+          vedrebbe — ed è esattamente quello che è successo con `exit` più
+          `useAnimationControls` (misurato: né ESC né il bottone chiudevano). */}
+      {isAddProjectOpen && (
+        <AddProjectModal
+          origin={addProjectOrigin}
+          onClose={handleCloseAddProject}
+        />
+      )}
     </div>
   );
 }

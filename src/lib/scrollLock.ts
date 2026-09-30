@@ -46,24 +46,47 @@ const SCROLL_KEYS = new Set([
   'End',
 ]);
 
-let locked = false;
+// I MOTIVI DEL BLOCCO.
+//
+// Un solo flag boolean diceva "la pagina è ferma", ma i due blocchi hanno regole
+// diverse e possono convivere. Il blocco d'ingresso (preloader) blocca i tasti
+// di scroll SOLO finché la prima pagina non è completa: dopo, la pagina scorre
+// normalmente e il blocco è solo una difesa d'emergenza. Il blocco del modal, al
+// contrario, deve trattenere i tasti per tutto il tempo che il dialog è aperto,
+// anche con la prima pagina già a posto — altrimenti Tab che esce dal dialog
+// finirebbe su FINE e farebbe scorrere la pagina sotto.
+type LockReason = 'entry' | 'modal';
+
+// Un Set e non un booleano: i due blocchi possono essere richiesti insieme (per
+// esempio il modal aperto mentre un rimontaggio riprende la sequenza) e devono
+// potersi annullare indipendentemente. Con un solo flag, annullarne uno
+// lascerebbe la pagina ferma o sbloccata senza che nessuno lo sapesse.
+const reasons = new Set<LockReason>();
+
 let keydownHandler: ((event: KeyboardEvent) => void) | null = null;
 
 /**
- * Tastiera bloccata solo durante preloader ed entering.
+ * Tastiera bloccata quando c'è un blocco che lo richiede.
  *
  * Lo stato si legge a ogni pressione invece di essere chiuso dentro
- * `lockScroll`: e' `unlockScroll` a rimuovere il listener, ma la lettura
- * rende la condizione esplicita anche per chi legge il file, e lascia il
- * listener innocuo se per un errore sopravvivesse allo sblocco.
+ * `lockScroll`: è `unlockScroll` a rimuovere il listener, ma la lettura rende
+ * la condizione esplicita anche per chi legge il file, e lascia il listener
+ * innocuo se per un errore sopravvivesse allo sblocco.
  */
 const onKeyDown = (event: KeyboardEvent) => {
-  if (entryState.get() === 'hero') return;
-  if (!SCROLL_KEYS.has(event.key)) return;
-  // preventDefault, non stopPropagation: il tasto deve proprio non arrivare
-  // al documento, altrimenti il browser lo tradurrebbe in scroll nativo
-  // annullando il blocco.
-  event.preventDefault();
+  // Il blocco del modal trattiene i tasti SEMPRE, finché è attivo.
+  if (reasons.has('modal') && SCROLL_KEYS.has(event.key)) {
+    event.preventDefault();
+    return;
+  }
+  // Il blocco d'ingresso trattiene i tasti solo finché la sequenza non è
+  // finita: dopo, la pagina deve poter scorrere da tastiera.
+  if (entryState.get() !== 'hero' && SCROLL_KEYS.has(event.key)) {
+    // preventDefault, non stopPropagation: il tasto deve proprio non arrivare
+    // al documento, altrimenti il browser lo tradurrebbe in scroll nativo
+    // annullando il blocco.
+    event.preventDefault();
+  }
 };
 
 let compensationPx = 0;
@@ -71,10 +94,16 @@ let compensationPx = 0;
 /**
  * Blocca lo scroll. Idempotente: chiamarla due volte non applica due volte la
  * compensazione, che sommerebbe due padding e stringerebbe il layout.
+ *
+ * `reason` dice CHI chiede il blocco. Il primo che arriva fa il lavoro vero e
+ * misura la scrollbar; i successivi non rifanno niente, perché il lavoro è già
+ * fatto e rifarlo significherebbe sommare due padding.
  */
-export const lockScroll = (): void => {
-  if (typeof window === 'undefined' || locked) return;
-  locked = true;
+export const lockScroll = (reason: LockReason = 'entry'): void => {
+  if (typeof window === 'undefined') return;
+  const alreadyLocked = reasons.size > 0;
+  reasons.add(reason);
+  if (alreadyLocked) return;
 
   // La misura va PRIMA di nascondere l'overflow: dopo, `clientWidth` coincide
   // con `innerWidth` e la differenza vale sempre zero, cioè nessuna
@@ -106,19 +135,18 @@ export const lockScroll = (): void => {
  * scroll esistenti (gli stop magnetici delle sezioni successive): senza, le
  * quote sarebbero quelle misurate col preloader ancora a schermo.
  */
-export const unlockScroll = (): void => {
+export const unlockScroll = (reason: LockReason = 'entry'): void => {
   if (typeof window === 'undefined') return;
+  reasons.delete(reason);
+  if (reasons.size > 0) {
+    // Un altro blocco è ancora attivo: la pagina resta ferma e non si tocca
+    // nulla. Sbloccare qui sarebbe l'errore classico del flag singolo.
+    return;
+  }
   if (keydownHandler) {
     window.removeEventListener('keydown', keydownHandler);
     keydownHandler = null;
   }
-  if (!locked) {
-    // Idempotente come il blocco: senza questo guard, una seconda chiamata
-    // rimisurerebbe la pagina due volte.
-    entryState.set('hero');
-    return;
-  }
-  locked = false;
 
   document.documentElement.style.overflow = '';
   document.body.style.overflow = '';
@@ -135,4 +163,4 @@ export const unlockScroll = (): void => {
 };
 
 /** Stato del blocco, per il debug e per i test. */
-export const isScrollLocked = (): boolean => locked;
+export const isScrollLocked = (): boolean => reasons.size > 0;

@@ -23,11 +23,17 @@ export default function ScrollHint({
   autoStart?: boolean;
   /** Se valori, l'hint si compone una volta sola con lo scramble. */
   scrambleText?: string;
-  /** Chiamata quando l'hint ha finito di comporsi. */
+  // Chiamata quando l'hint ha finito di comporsi.
+  //
+  // E' il momento in cui la prima pagina e' davvero finita: l'avatar ha
+  // completato l'ingresso, coordinate e prompt sono scritti, e da qui in poi
+  // l'utente puo' andare avanti. Percio' e' anche il momento in cui la pagina
+  // si dichiara "completa": tutto quello che deve comparire a ogni ingresso —
+  // avatar, headline, sottotitolo, coordinate, questo prompt — e' gia' a
+  // posto quando questa funzione viene chiamata.
   onResolved?: () => void;
 }) {
   const textRef = useRef<HTMLSpanElement>(null);
-  const startedRef = useRef(false);
   // La rivelazione e' un MotionValue e non uno stato: l'opacita' finale e' il
   // prodotto fra questa e quella che arriva dalla scena, e Fr Motion deve poter
   // leggerla a ogni frame senza un render.
@@ -55,17 +61,34 @@ export default function ScrollHint({
     // che in quel caso non avverra'.
     if (entryState.get() !== 'preloader') {
       revealNow();
-      if (scrambleText && textRef.current) {
+      if (textRef.current) {
         textRef.current.style.removeProperty('visibility');
       }
+      onResolved?.();
       return;
     }
-    if (!scrambleText) return;
+
+    // SENZA `scrambleText` l'hint non si compone: si ACCENDE e resta animato in
+    // idle dalla classe CSS `.scroll-hint-pulse`, che e' gia' sullo span interno
+    // e non richiede nessun controller. E' il comportamento degli altri hint
+    // (vedi NebulaScene) ed e' quello giusto per un prompt: il cambio caratteri
+    // serve a comporre un titolo che arriva, mentre qui il testo e' gia' noto e
+    // deve solo apparire quando la pagina e' pronta.
+    //
+    // Resta pero' `autoStart={false}`: l'hint dell'hero non si accende al mount
+    // come quelli delle sezioni interne, perche' deve aspettare che l'avatar abbia
+    // finito l'ingresso. E' la sequenza a chiamarlo, non il componente.
+    if (!scrambleText) {
+      registerScrollHint(() => {
+        revealNow();
+        onResolved?.();
+      });
+      return () => clearScrollHint();
+    }
+
     if (textRef.current) textRef.current.style.visibility = 'hidden';
     registerScrollHint(() => {
       revealNow();
-      if (startedRef.current) return;
-      startedRef.current = true;
       new ScrambleController({
         target: scrambleText,
         node: textRef.current as HTMLElement,

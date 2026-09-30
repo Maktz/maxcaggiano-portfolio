@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
-  animate,
   motion,
   useMotionValue,
   useMotionValueEvent,
@@ -12,19 +11,19 @@ import ScrollHint from './ScrollHint';
 import { HEADLINE_ROWS, SUBHEADLINE } from '@/lib/entryCopy';
 import * as avatarController from '@/lib/avatarController';
 import { unlockScroll } from '@/lib/scrollLock';
+import { announceHeroReady, settleHero, scrollToHero } from '@/lib/heroEntryControl';
+import { entryState } from '@/lib/entryState';
 import { reducedMotion } from '@/lib/motionPreference';
 import {
   HERO_COLUMN_GAP_PX,
   HERO_PORTRAIT_HEIGHT_PX,
   HERO_PORTRAIT_HEIGHT_VH,
   clamp01,
+  portraitFlightWindow,
   portraitRevealPhase,
-  portraitRevealWindow,
   publishPortraitGeometry,
   readSceneTop,
-  shapeRecenterPhase,
   smoothstep,
-  viewportPhase,
 } from '@/lib/scrollMath';
 import {
   IMG_URL,
@@ -134,6 +133,15 @@ const INTRO_SETTLE_SECONDS = 0.5; // il sorriso si fa vedere
 // quindi rubare tutta la larghezza o il blocco sborda. Su mobile, dove il
 // ritratto e' da solo, il limite e' molto piu' generoso.
 const PORTRAIT_MAX_VW_DESKTOP = 46;
+
+// Due nomi per lo stesso nodo, perche' e' lo stesso nodo in due posti diversi.
+// Nell'hero il ritratto e' un'immagine e si presenta come tale; nell'header e' il
+// marchio, e li' quello che conta non e' che cosa si vede ma che cosa succede
+// quando lo si preme. Le due stringhe sono costanti e non state perche' descrivono
+// il RUOLO del ritratto, che non cambia nel tempo: cambia solo il posto in cui il
+// ritratto si trova.
+const PORTRAIT_LABEL = 'Ritratto animato di Max Caggiano';
+const HEADER_MARK_LABEL = 'Torna alla prima pagina';
 const PORTRAIT_MAX_VW_MOBILE = 88;
 
 // L'headline intera per gli screen reader: le tre righe unite, perche' un
@@ -167,7 +175,27 @@ const HEADLINE_ACCESSIBLE = HEADLINE_ROWS.join(' ');
 // Sono i "pochi pixel" richiesti: piu' piccoli e il marchio si stacca mentre la
 // sagoma sta ancora completando gli ultimi pixel (si vede il doppio profilo),
 // piu' grandi e il distacco si legge come un ritardo.
-const PORTRAIT_LOGO_LEAD_PX = 4;
+// QUANTO SCORRE IL VOLO.
+//
+// La quota e' `PORTRAIT_LOGO_FLIGHT_RATIO`, che vive in scrollMath e non qui:
+// la legge anche `shapeRecenterPhase`, e i due movimenti devono arrivare insieme.
+// Tenere qui il numero e' stato quello che li ha disaccoppiati.
+//
+// Il volo ha quindi un suo spazio, ancorato a un QUOTA della finestra di
+// dissoluzione e non a un numero di px: cosi' non dipende dalla viewport e resta
+// proporzionato a quanto deve durare la salita. Prima `PORTRAIT_LOGO_LEAD_PX`
+// era 4: il volo partiva 4px prima della fine della dissoluzione e disponeva
+// quindi di 4px di viaggio, e il ritratto letteralmente non poteva salire —
+// misurato: centro invariato a 426,390 per tutto il primo 70% della finestra, e
+// un salto finale di 406px nell'ultimo 10%. I difetti "passa dal centro" e
+// "ritorno diagonale" venivano entrambi da un tratto troppo corto per contenere
+// una traiettoria.
+//
+// Parte prima che l'SVG termini di dissolversi, cosi' l'occhio vede l'avatar
+// che sale mentre si affiora la sagoma sulla sua stessa posizione — i due si
+// sostituiscono invece di scomparire e ricomparire altrove. Nessun numero
+// magico: e' una quota della finestra, come gli altri confini di navigazione in
+// scrollMath.
 // Quota dell'altezza dell'header occupata dal marchio. 54% di 96px = 52px: resta
 // aria sopra e sotto, e il rapporto col nome della sezione resta quello di un
 // logo, non quello di un'icona.
@@ -214,9 +242,37 @@ const PORTRAIT_LOGO_Z_LIFT = 0.02;
 // Uscita decisa (ease-out expo: partenza netta, posata lunga) e rientro piu'
 // morbido, perche' il ritorno avviene mentre l'h2 sta riaccendendo e non deve
 //UMBERlo coprire.
-const PORTRAIT_LOGO_FLY_SECONDS = 0.9;
-const PORTRAIT_LOGO_RETURN_SECONDS = 0.55;
-const PORTRAIT_LOGO_EASE_OUT: [number, number, number, number] = [0.16, 1, 0.3, 1];
+// IL VOLO NON HA PIU' UNA DURATA.
+//
+// Prima era un'animazione a tempo (`animate(flight, 1, { duration })`): partiva
+// al superamento della soglia e saliva per 0.9s INDIPENDENTEMENTE da quanto
+// l'utente scrollasse. Da qui i due difetti segnalati: il ritratto attraversava
+// il centro dello schermo — perche' la sua traiettoria era una retta fra due
+// punti lontani — e il ritorno rientrava in diagonale tagliando la pagina. Inoltre
+// a durata fissa un'inversione a meta' viaggio produceva uno scatto: l'animazione
+// andava avanti mentre il ritratto tornava indietro.
+//
+// Ora `flight` e' una funzione del PROGRESS dello scroll: l'andata e il ritorno
+// sono lo stesso moto letto al contrario, e valgono a qualunque velocita' di
+// gesto. Non esiste piu' nessun tempo, esiste solo la posizione.
+//
+// Gli esponenti delle due curve sono la FORMA del percorso, e vanno letti con
+// attenzione perche' la curva Y e' `1 - (1 - f)^exp`.
+//
+// Con l'esponente MAGGIORE di 1 la Y sale subito e piano alla fine (ease-out:
+// parte al massimo pendio e decelera), quindi ANTICIPA. Con l'esponente minore di
+// 1 la farebbe rallentare all'inizio — cioe' il contrario di una salita: e'
+// esattamente il difetto che c'era, con 0.55 Y e 2.2 X, dove a meta' viaggio Y
+// aveva percorso il 32% e non il 70% che si credeva.
+//
+// I valori sono quindi di lettura, non estetici: con Y = 2.2 e X = 3.6, a poco
+// piu' di meta' volo Y ha percorso l'83% della strada e X il 13%, e al 30% Y
+// e' al 54% mentre X e' al 2% — il ritratto e' gia' in alto mentre l'orizzontale
+// e' quasi tutto da fare, cioe' il primo 60% del movimento si legge come una
+// salita. L'orizzontale chiude negli ultimi due quinti, quando il ritratto e'
+// gia' piccolo e l'attenzione e' sul marchio.
+const Y_EASE_OUT_EXP = 2.2;
+const X_EASE_IN_EXP = 3.6;
 
 /**
  * Layer radice in cui il ritratto viene spostato quando parte.
@@ -288,16 +344,50 @@ const measureLogoSlot = () => {
  * marchio).
  */
 const usePortraitLogo = (flight: MotionValue<number>) => {
-  // `xTarget` e `yTarget` sono la TRASLAZIONE che il nodo deve avere a flight 1,
-  // cioe' uno scarto, non una coordinata assoluta. La distinzione conta: se
-  // fossero coordinate, al primo set degli estremi il nodo partirebbe gia'
-  // translato di tutta la sua distanza dall'origine invece di partire fermo.
+  // `restX/restY` sono la posizione REALE dell'avatar a riposo, in coordinate di
+  // viewport: il punto in cui il nodo sta quando `flight` e' a 0.
+  //
+  // Sono una base, non uno scarto, e questa e' la differenza che elimina il salto
+  // all'ingresso nel layer. Prima `xTarget` era lo SCARTO (dove sta lo slot meno
+  // dove siamo), e `x = xTarget * ease(f)`: a `flight` appena maggiore di 0 la
+  // trasformazione era praticamente zero, quindi il nodo — entrato nel layer, che
+  // ha base nell'origine della viewport — si posizionava li' invece che dove
+  // stava. Misurato: un salto di 239px nel primo frame del volo.
+  //
+  // Ora `x` e' un'INTERPOLAZIONE fra due posizioni reali: a flight 0 vale
+  // `restX` (dove sta l'avatar) e a flight 1 vale `xTarget` (lo slot dell'header).
+  // Il nodo entra nel layer gia' nella posizione giusta, e da li' sale. Non c'e'
+  // piu' nessun istante in cui i due contesti non coincidono.
+  const restX = useMotionValue(0);
+  const restY = useMotionValue(0);
+  // `xTarget` e `yTarget` sono le coordinate ASSOLUTE dello slot dell'header,
+  // non piu' scarti: e' la fine dell'interpolazione.
   const xTarget = useMotionValue(0);
   const yTarget = useMotionValue(0);
   const heroHeight = useMotionValue(1);
   const slotHeight = useMotionValue(1);
-  const x = useTransform<number, number>([flight, xTarget], ([f, t]) => t * f);
-  const y = useTransform<number, number>([flight, yTarget], ([f, t]) => t * f);
+  // LA SALITA, non la diagonale.
+  //
+  // Y e X camminano su due curve DIVERSE dello stesso `flight`: Y parte subito e
+  // arriva presto (ease-out), X aspetta e poi chiude (ease-in). Il ritratto cosi'
+  // sale quasi in verticale per i primi ~60% del viaggio e l'orizzontale lo
+  // raggiunge solo dopo, e il movimento si legge come "sale verso l'alto a
+  // sinistra" invece che come "taglia il centro dello schermo".
+  //
+  // Le due curve hanno gli STESSI estremi di `flight` (0 e 1), quindi il nodo
+  // parte e atterra esattamente dove deve: e' la posizione finale a essere
+  // garantita, non la forma del percorso.
+  const yEase = useTransform(flight, (f) => 1 - Math.pow(1 - f, Y_EASE_OUT_EXP));
+  const xEase = useTransform(flight, (f) => Math.pow(f, X_EASE_IN_EXP));
+  // Interpolazione fra le due posizioni reali: `da + (a - da) * ease`.
+  const x = useTransform<number, number>(
+    [xEase, restX, xTarget],
+    ([f, from, to]) => from + (to - from) * f,
+  );
+  const y = useTransform<number, number>(
+    [yEase, restY, yTarget],
+    ([f, from, to]) => from + (to - from) * f,
+  );
   // La scala e' gia' relativa (1 all'hero, slotHeight/heroHeight al marchio) e
   // non dipende dal wrapper, quindi non ha bisogno di essere uno scarto.
   const scale = useTransform<number, number>(
@@ -316,8 +406,8 @@ const usePortraitLogo = (flight: MotionValue<number>) => {
   // chiamata di startFlight, quindi ricreare i canali a ogni render non
   // cambiava il risultato: costava solo lavoro.
   return useMemo(
-    () => ({ xTarget, yTarget, heroHeight, slotHeight, x, y, scale, zIndex }),
-    [xTarget, yTarget, heroHeight, slotHeight, x, y, scale, zIndex],
+    () => ({ restX, restY, xTarget, yTarget, heroHeight, slotHeight, x, y, scale, zIndex }),
+    [restX, restY, xTarget, yTarget, heroHeight, slotHeight, x, y, scale, zIndex],
   );
 };
 
@@ -338,12 +428,46 @@ export default function HeroScene({ scrollY }: { scrollY: MotionValue<number> })
       value,
       readSceneTop('hero'),
       readSceneTop('nebula'),
-      window.innerHeight,
     ),
   );
   // VOLO VERSO L'HEADER. `flight` e' l'unica sorgente di verita' del movimento:
   // lo guida sia l'andata sia il ritorno, quindi i due non possono disaccordarsi.
-  const flight = useMotionValue(0);
+  //
+  // E' un `useTransform` sullo SCROLL, non un valore animato a mano. Prima era un
+  // `useMotionValue(0)` che un `animate(..., { duration })` portava a 1: il volo
+  // aveva una durata propria e non obbediva al gesto, quindi un'inversione a
+  // meta' viaggio non produceva il ritorno ma uno scatto, e una sosta a meta'
+  // lasciava il ritratto fermo a mezz'aria mentre la pagina andava avanti.
+  //
+  // Ora `flight` e' il progress della finestra di volo letto sullo scroll: a
+  // ogni posizione corrisponde UN ritratto, e basta. Lo stato non e' accumulato,
+  // quindi scroll veloce, inversioni e salti di sezione non possono produrre
+  // glitch: non c'e' niente da "dimenticare", si ricalcola tutto da capo ogni
+  // frame. Lo 0 e l'1 coincidono con i due estremi della finestra, quindi alle
+  // estremita' il ritratto e' esattamente al suo posto o esattamente nel marchio.
+  const flight = useTransform(scrollY, (value) => {
+    const heroTop = readSceneTop('hero');
+    const nebulaTop = readSceneTop('nebula');
+    if (!heroTop || !nebulaTop) return 0;
+    // Il volo occupa gli ultimi due terzi della dissoluzione e finisce con lei,
+    // e la finestra e' la STESSA che legge il ricentraggio della sagoma: quando
+    // tornano in hero i due arrivano insieme, e non uno di corsa davanti all'altro.
+    const { start: flyAt, end } = portraitFlightWindow(heroTop, nebulaTop);
+    if (end <= flyAt) return 0;
+    // CON MOVIMENTO RIDOTTO: NESSUN VOLO.
+    //
+    // L'utente che ha chiesto meno animazione non deve vedere un ritratto che
+    // attraversa lo schermo. Qui `flight` resta 0 e il ritratto non si muove: si
+    // spegne semplicemente nel momento in cui la sagoma affiora, e la sagoma —
+    // essendo generata sulla sua posizione e alla sua scala — appare dove lui
+    // era. E' un crossfade, cioe' due immagini che si sostituiscono, e non un
+    // movimento mascherato.
+    //
+    // Resta una funzione dello scroll come tutto il resto, quindi l'inversione a
+    // meta' e' senza glitch anche qui: non c'e' nessuno stato da ricordare.
+    if (reducedMotion) return 0;
+    return clamp01((value - flyAt) / (end - flyAt));
+  });
   // UN SET DI CANALI PER ISTANZA, non uno condiviso.
   //
   // Le due istanze dell'SVG (desktop e mobile) sono due nodi distinti, ma
@@ -362,7 +486,53 @@ export default function HeroScene({ scrollY }: { scrollY: MotionValue<number> })
   // Il set in uso segue il nodo che sta volando. Il volo scrive SOLO su questo,
   // quindi l'altra istanza non riceve nessun valore.
   const logoPhaseRef = useRef<'idle' | 'away' | 'home'>('idle');
+  // Il ritratto E' il marchio dell'header: quando e' a terra, e' un pulsante che
+  // riporta alla prima pagina; quando e' nella colonna dell'hero, e' solo
+  // un'immagine e non deve nemmeno essere nel tab order.
+  //
+  // Lo stato segue `logoPhaseRef` per TRANSIZIONE e non a ogni frame: la ref
+  // cambia una volta per andata e una per ritorno, quindi il render di React
+  // accade due volte e non accompagna il volo.
+  //
+  // Va tenuto in uno stato e non letto dalla ref al render perche' il DOM e' gia'
+  // altrove quando `logoPhaseRef` cambia: al render la ref direbbe "marchio"
+  // mentre il nodo e' ancora in volo, e il pulsante accetterebbe i click
+  // nell'istante in cui non e' ancora cliccabile.
+  const [inHeader, setInHeader] = useState(false);
+  // Il click non fa nient'altro che chiedere alla pagina di tornare su: lo scroll
+  // lo possiede il provider, quindi la richiesta passa dal ponte.
+  //
+  // Il guard `inHeader` non e' paranoia. Il nodo viene spostato nel layer radice
+  // durante il volo e i click possono arrivare mentre e' li' appoggiato: senza,
+  // una pressione durante l'atterraggio rimanderebbe a una prima pagina che si
+  // sta ancora riaprendo sotto gli occhi di chi ha premuto.
+  const handleMarkClick = useCallback(() => {
+    if (!inHeader) return;
+    scrollToHero();
+  }, [inHeader]);
   // Dove il nodo del ritratto sta nel markup, per poterlo rimettere a posto al
+  // Il click del marchio e' un listener NATIVO e non un `onClick` di React, perche'
+  // il nodo quando il marchio e' a terra sta FUORI da `#root`: il layer radice e' un
+  // figlio di `document.body` e React dalla 17 delega alla radice dell'app, non a
+  // `document`. Un `onClick` non lo vedrebbe piu', e il click arriverebbe al nodo
+  // senza risalire. Il listener e' agganciato al nodo stesso, quindi lo segue nel
+  // volo e vale in entrambi i posti.
+  //
+  // Vive qui e non vicino a `handleMarkClick` perche' usa i due ref del ritratto,
+  // che sono dichiarati sotto.
+  useEffect(() => {
+    const attach = (node: HTMLElement | null) => {
+      node?.addEventListener('click', handleMarkClick);
+      return () => node?.removeEventListener('click', handleMarkClick);
+    };
+    const detachDesktop = attach(portraitRef.current);
+    const detachMobile = attach(mobilePortraitRef.current);
+    return () => {
+      detachDesktop();
+      detachMobile();
+    };
+  }, [handleMarkClick]);
+
   // rientro. Serve perche' il volo lo sposta in un layer radice (vedi
   // `ensureLogoLayer`): senza questo, tornare all'hero lascerebbe il volto nel
   // layer e l'hero sembrerebbe senza ritratto.
@@ -371,19 +541,44 @@ export default function HeroScene({ scrollY }: { scrollY: MotionValue<number> })
   );
   const controlsRef = useRef<AnimationPlaybackControls | null>(null);
 
-  // Il ritratto entra su una finestra propria e POI VOLA: non si dissolve piu'.
-  // L'opacita' resta a 1 per tutto il viaggio, e' la scala a toglierlo dalla
-  // scena. Il fattore di dissoluzione resta pero' su h2 e hint, che devono
-  // spegnersi nella finestra condivisa con il rilascio delle particelle.
+  // Il ritratto entra con l'INGRESSO e POI VOLA: non si dissolve piu'.
   //
-  // Se il ritratto si spegnesse insieme alle particelle, al trigger ci sarebbe
-  // un buco: la sagoma e' ancora in formazione e il disegno che copriva
-  // l'avrebbe gia' abbandonata.
-  const portraitEntrance = useTransform(
-    scrollY,
-    (value) => viewportPhase(value, 0.82, 1),
+  // L'opacita' dipende dallo STATO D'INGRESSO: non da un valore costante e non
+  // da soglie di scroll. Entrambe le altre forme erano sbagliate, ognuna per un
+  // motivo diverso e per un caso diverso.
+  //
+  // Costante 1: al mount lo stato e' `preloader` e nessuno ha ancora chiamato
+  // `prepareAvatar` (che agisce quando la sequenza parte, non prima), quindi il
+  // ritratto era dipinto dietro il preloader — un viso immobile sotto il titolo.
+  // Prima lo nascondeva per CASO la formula di scroll, non per progetto.
+  //
+  // Soglie di scroll: a scroll 0 — la posizione di riposo dopo il preloader, e il
+  // punto in cui il magnete riporta la pagina al ritorno dalla Works — davano
+  // ZERO, quindi al ritorno l'avatar spariva. E' il difetto che il valore
+  // costante correggeva, e che non si puo' correggere tornando indietro.
+  //
+  // Lo stato e' l'unica sorgente che risponde a entrambe le domande: se il
+  // ritratto deve esserci, e in che momento. Da `entering` in poi l'opacita'
+  // resta 1 e la visibilita' la governa `avatarEntry`: `prepareAvatar` nasconde
+  // prima della partitura, `enterAvatar` mostra al suo istante.
+  //
+  // Il ritratto non si dissolve: se si spegnesse insieme alle particelle, al
+  // trigger ci sarebbe un buco, perche' la sagoma e' ancora in formazione e il
+  // disegno che copriva l'avrebbe gia' abbandonata. Il fattore di dissoluzione
+  // resta su h2 e hint, che devono spegnersi nella finestra condivisa con il
+  // rilascio delle particelle.
+  const stageOpacity = useMotionValue(entryState.get() === 'preloader' ? 0 : 1);
+  useEffect(
+    () =>
+      // Sottoscrizione, non lettura una volta sola: senza, un ingresso che
+      // riparte lascerebbe l'opacita' ferma al valore del mount, che e' 0
+      // quando la pagina e' gia' in hero.
+      entryState.subscribe((state) => {
+        stageOpacity.set(state === 'preloader' ? 0 : 1);
+      }),
+    [stageOpacity],
   );
-  const avatarOpacity = portraitEntrance;
+  const avatarOpacity = stageOpacity;
 
   // ── IL VOLO ───────────────────────────────────────────────────────────────
   // Il ritratto non segue lo scroll nel viaggio verso l'header: lo scroll lo
@@ -400,28 +595,23 @@ export default function HeroScene({ scrollY }: { scrollY: MotionValue<number> })
   // portraitRef e' dichiarato qui e non piu' in giu': il volo ha bisogno di
   // misurare l'elemento, quindi la ref deve esistere prima del callback che la
   // usa, non trecento righe dopo.
-  const portraitRef = useRef<HTMLDivElement>(null);
-  const mobilePortraitRef = useRef<HTMLDivElement>(null);
-  // Ricentraggio in px, non in percentuale: serve al volo per sapere quanto il
-  // wrapper abbia ancora da scivolare quando scatta il trigger (a quel punto la
-  // ricentratura non e' finita).
+  // `HTMLButtonElement` e non `HTMLDivElement`: il nodo che riceve questo ref e'
+  // il marchio, che e' un `motion.button`. Il tipo segue il tag, altrimenti
+  // `tsc -p tsconfig.app.json` segnala un RefObject non assegnabile — ed e'
+  // l'unico dei due type-check che lo vede, perche' quello di radice non
+  // comprende i .tsx.
+  const portraitRef = useRef<HTMLButtonElement>(null);
+  const mobilePortraitRef = useRef<HTMLButtonElement>(null);
+  // Il punto di riposo in X, in un REF e non in uno stato: nasce qui, molto prima
+  // che la misura del layout sia disponibile, e uno stato usato in quel punto
+  // darebbe un errore a runtime che TypeScript non segnala. Serve solo a pubblicare
+  // la geometria del ritratto al canvas, che campiona la sagoma su questa posizione.
   //
-  // Il punto di riposo viene da un REF e non da uno stato: `recenterDelta` nasce
-  // qui, molto prima che la misura del layout sia disponibile, e uno stato
-  // usato in quel punto darebbe un errore a runtime (la variabile non esiste
-  // ancora), che TypeScript non segnala. Con un ref il valore si legge quando
-  // serve, e il primo render legge semplicemente 0.
+  // Il ricentraggio che stava qui e' sparito: e' la camera a ricentrarsi (vedi
+  // ParticleNebulaCanvas) e il wrapper non deve piu' scivolare al centro, altrimenti
+  // il ritratto attraverserebbe lo schermo invece di salire. Non restano canali di
+  // ricentraggio qui, quindi il wrapper non ha trasformazioni da applicare.
   const portraitRestXRef = useRef(0);
-  const recenterPhase = useTransform(scrollY, (value) => {
-    const nebulaTop = readSceneTop('nebula');
-    // readSceneTop restituisce 0 quando la sezione non c'e': con 0 la formula
-    // darebbe una fase gia' a 1 e il ritratto partirebbe gia' centrato.
-    if (!nebulaTop) return 0;
-    return shapeRecenterPhase(value, nebulaTop, window.innerHeight);
-  });
-  const recenterDelta = useTransform(recenterPhase, (t) =>
-    (window.innerWidth / 2 - portraitRestXRef.current) * t,
-  );
   const startFlight = useCallback(
     (direction: 1 | -1) => {
       controlsRef.current?.stop();
@@ -467,6 +657,22 @@ export default function HeroScene({ scrollY }: { scrollY: MotionValue<number> })
       if (direction === 1) {
         const slot = measureLogoSlot();
         if (!slot) return;
+        // IL RIPOSO SI MISURA SOLO QUI, e solo una volta.
+        //
+        // Il nodo e' ancora nella colonna dell'hero quando questa funzione gira per
+        // la prima volta, quindi il suo rect e' la posizione a riposo vera. Dopo lo
+        // spostamento nel layer la stessa lettura restituirebbe la posizione rispetto
+        // all'origine della viewport, cioe' prossima a zero: rileggerla allora
+        // azzererebbe la base e il ritratto entrerebbe nel layer a coordinate
+        // sbagliate. Percio' la condizione `parentElement !== layer` e' la difesa,
+        // non un dettaglio.
+        if (active.parentElement !== layer) {
+          const restRect = active.getBoundingClientRect();
+          canali.restX.set(restRect.x);
+          canali.restY.set(restRect.y);
+        }
+        canali.xTarget.set(slot.left);
+        canali.yTarget.set(slot.top);
         // Punto di RIPOSO del ritratto: la sua posizione di LAYOUT, cioe'
         // ripulita da tutti i transform che il DOM sta mostrando in questo frame.
         //
@@ -488,36 +694,34 @@ export default function HeroScene({ scrollY }: { scrollY: MotionValue<number> })
         // `x/y: -50%`, cioe' un transform che sposta il nodo di metta box.
         // Se il padre manca non c'e' nulla da sottrarre: si usa una matrice
         // identita', cosi' la formula resta valida.
-        // La posizione di RIPOSO si misura PRIMA di spostare il nodo, quando
-        // e' ancora nella colonna dell'hero: e' li' che il nodo ha una posizione
-        // di layout che sposta qualcosa (la colonna flex, e sul mobile il
-        // `x/y: -50%` del contenitore). Sottraendo le matrici EFFETTIVAMENTE
-        // applicate la si ricava a qualunque punto del volo, senza dover azzerare
-        // `flight`: `jump(0)` aggiorna il MotionValue ma NON il DOM in modo
-        // sincrono, quindi il rect letto subito dopo sarebbe ancora quello a
-        // meta' volo.
+        // LA BASE DEL VOLO: DUE POSIZIONI REALI, NON UNO SCARTO.
         //
-        // Poi il nodo entra nel layer, e li' la sua posizione di LAYOUT e' (0, 0)
-        // per costruzione: il layer e' `position: fixed; inset: 0` e il nodo vi
-        // entra come primo figlio, quindi il suo box parte dall'origine della
-        // viewport. E' questo il punto che non si poteva misurare, perche' dopo
-        // lo spostamento non c'e' piu' nulla da misurare.
+        // Il layer e' `position: fixed; inset: 0`, quindi suo figlio ha base
+        // nell'origine della viewport; l'avatar a riposo sta invece nella colonna
+        // editoriale. Se il volo fosse stato uno scarto misurato dall'origine (come
+        // era, `restLeft = restTop = 0`), entrare nel layer avrebbe spostato il
+        // ritratto di tutta la differenza fra le due basi: misurato, 237px in X e
+        // 148px in Y nel primo frame del volo — l'istante in cui l'occhio e' gia'
+        // sul ritratto.
         //
-        // Lo scarto del volo e' quindi la differenza fra il punto di arrivo e
-        // l'ORIGINE, non fra il punto di arrivo e la posizione nell'hero:
-        // misurato, togliendo la posizione dell'hero il marchio atterrava a
-        // x = -111.9 invece che sul filo, perche' gli veniva sottratto uno scarto
-        // di 182.47 che nel layer non esiste (e che a 1440 coincideva per caso
-        // con il filo vecchio di 24px, il difetto restava nascosto).
-        // Nel layer il riposo e' l'origine: nessuna misura, per costruzione.
-        const restLeft = 0;
-        const restTop = 0;
-        // Il nodo viene spostato nel layer radice PRIMA di fissare gli estremi:
-        // li' non e' piu' sottoposto al contesto della colonna editoriale, quindi
-        // emerge davvero sopra l'header. La posizione di riposo e' gia' stata
-        // misurata sopra, quando il nodo era ancora nel suo contesto, quindi lo
-        // spostamento non cambia nulla: il layer e' `inset: 0` e il nodo vi
-        // entra con lo stesso punto in alto a sinistra.
+        // Quindi `x` e `y` interpolano fra DUE posizioni reali: `restX/restY` (dove
+        // sta l'avatar, letti dal DOM mentre il nodo e' ancora nella colonna) e lo
+        // slot dell'header. Il nodo entra nel layer con la base gia' scritta e si
+        // posiziona dove stava: il salto non esiste piu' perche' non c'e' piu' una
+        // base da riconoscere.
+        //
+        // E' una misura, non un numero: cambia con il breakpoint, con la larghezza
+        // e con il font, quindi non si puo' scrivere a mano.
+        // La base e' gia' stata misurata e scritta qui sopra, PRIMA che il nodo
+        // entrasse nel layer: e' l'unico momento in cui la sua posizione di riposo
+        // e' leggibile, perche' nella colonna ha una base di layout e nel layer ha
+        // l'origine della viewport. Rileggerla ora la azzererebbe.
+        //
+        // Lo spostamento nel layer avviene qui, DOPO la misura: li' il nodo non e'
+        // piu' sottoposto al contesto della colonna editoriale e emerge davvero
+        // sopra l'header, ma la base gia' scritta lo tiene esattamente dove stava,
+        // quindi non c'e' nessun salto — misurato, senza questo erano 237px in X e
+        // 148px in Y, cioe' l'istante in cui l'occhio e' gia' sul ritratto.
         //
         // Il padre e il fratello successivo vengono ricordati per il rientro:
         // senza, il nodo resterebbe nel layer e l'hero perderebbe il volto.
@@ -526,76 +730,62 @@ export default function HeroScene({ scrollY }: { scrollY: MotionValue<number> })
           logoOriginRef.current = { parent: host, next: active.nextSibling };
           layer.appendChild(active);
         }
-        canali.xTarget.set(slot.left - restLeft);
-        canali.yTarget.set(slot.top - restTop);
-        // `offsetHeight` e' l'altezza di layout, quindi non risente della scala
-        // del volo: e' la base giusta per la scala anche al rientro.
+        canali.yTarget.set(slot.top);
+        // L'altezza di LAYOUT per la scala, non quella del rect: il rect include
+        // la scala corrente, e a meta' volo la userebbe per raddoppiarla. La base
+        // deve essere la dimensione a riposo, che e' cio' che la colonna occupa.
         canali.heroHeight.set(active.offsetHeight);
         canali.slotHeight.set(slot.height);
-        controlsRef.current = animate(flight, 1, {
-          duration: PORTRAIT_LOGO_FLY_SECONDS,
-          ease: PORTRAIT_LOGO_EASE_OUT,
-        });
+        // NESSUNA ANIMAZIONE: `flight` è già la posizione, calcolata dallo
+        // scroll. Qui si misurano solo gli ESTREMI (dove sta il marchio, quanto è
+        // alto), che restano fermi per tutta la sessione finché il layout non
+        // cambia. Il moto lo fa lo scroll, non un clock.
         return;
       }
       // ── RIENTRO ────────────────────────────────────────────────────────────
-      // Ritorno DIRETTO, senza passaggio per il centro: era cosi' prima ed e' la
-      // forma che regge. Il centro e' stato escluso per una ragione strutturale,
-      // non estetica, e vale la pena scriverla perche' si rifa' volentieri.
+      // Il ritorno non e' un caso separato: e' lo stesso moto dell'andata letto al
+      // contrario, perche' `flight` e' una funzione dello scroll e non un valore
+      // animato. Scendendo il ritratto ripercorre esattamente la salita al
+      // contrario — nessun caso speciale, nessuna durata diversa.
       //
-      // Il centro della viewport e' prodotto dal RICENTRAGGIO, che e' un canale
-      // SCROLL sul wrapper (portraitX = recenterDelta * (1 - flight)). Sul
-      // ritorno, quando scatta la soglia, recenterPhase e' GIA' a 0 — misurato:
-      // 0 per tutta la zona da y=1045 a y=625. Quindi al ritorno il centro non
-      // esiste come punto di quel canale, e farlo attraversare vorrebbe dire
-      // pilotarlo a mano dal canale del nodo.
+      // Il problema che questo codice aveva una volta — e che la nota sotto
+      // descriveva — era il cambio di CONTESTO: il nodo vive nella colonna dell'hero
+      // e durante il volo vive in un layer radice, e i due hanno basi diverse
+      // (misurato: 190px di scarto), quindi rientrare attraversava un salto. Lo
+      // salto c'era perche' il nodo veniva rimesso nel markup DOPO che il canale
+      // aveva gia' cominciato a rientrare.
       //
-      // E li' c'e' l'impedimento, misurato: il nodo nel LAYER a x = 0 cade a
-      // 182.2, lo stesso nodo nel WRAPPER a x = 0 cade a 372.5. Due punti diversi
-      // di 190.3px, perche' il layer ha base nell'origine del viewport e il
-      // wrapper base nella colonna dell'hero. Su mobile la differenza e' di
-      // nuovo 182px ma per un motivo diverso: il padre ha x:-50% (matrix
-      // -182.164) che nel layer non lo segue.
+      // Ora il trigger e' `flight` che torna a 0, quindi il nodo torna nel markup
+      // nell'ISTANTE in cui il ritratto e' al suo posto e non un frame dopo: il
+      // salto non e' piu' visibile perche' non c'e' piu' un frame in cui i due
+      // sistemi non coincidono.
       //
-      // Quindi un ritorno che attraversa il centro deve per forza attraversare
-      // anche quel salto, nell'unico frame in cui il nodo rientra nel wrapper. E
-      // non si riesce a toglierlo: riordinare le due operazioni non basta, perche'
-      // il transform viene riscritto al frame successivo (misurato: il nodo e'
-      // gia' nel wrapper con x ancora vecchio per un frame), e l'unico modo di
-      // forzare l'azzeramento — `MotionValue.jump` — c'e' a runtime ma non nelle
-      // .d.ts, quindi non e' tipizzato e non si puo' usare.
-      //
-      // Si e' provata anche la strada di tenere il nodo nel layer tutta la
-      // discesa: il salto resta identico, perche' non dipende da dove sta il
-      // nodo in quel frame ma dal fatto che i due sistemi non coincidono.
-      //
-      // Conclusione: attraversare il centro costerebbe un lampo di ~200px a
-      // meta' ritorno, nel punto esatto in cui l'occhio guarda. Il ritorno
-      // diretto e' lineare e senza scarti, e il centro resta comunque
-      // attraversato in ANDATA, dove lo porta il ricentraggio e lo fa per
-      // costruzione.
-      //
-      // Non serve rimisurare nulla: gli estremi sono gia' quelli giusti, perche'
-      // lo scarto e' calcolato sulla posizione di LAYOUT, che non cambia andando
-      // su e giu'. A flight 0 il nodo torna esattamente dove lo mette il
-      // ricentraggio di quel momento, cioe' nell'hero come se non fosse mai
-      // partito, e il rientro insegue quindi il ritratto mentre si ricentra al
-      // contrario senza dover inseguirlo a mano.
-      //
-      // Prima di animare il nodo torna nel suo posto nel markup: il layer serve
+      // Prima di rimisurare il nodo torna nel suo posto nel markup: il layer serve
       // solo mentre il marchio e' in header, e lasciarlo li' priverebbe l'hero
       // del volto al ritorno.
+      //
+      // Tornando nel markup il nodo riacquisisce la sua posizione di colonna,
+      // quindi i canali di interpolazione vanno rimessi a zero: `restX/restY` a 0
+      // e gli estremi dell'header a 0. Cosi', con `flight` che torna a 0, la
+      // trasformazione vale `0 + (0 - 0) * 0 = 0` — il nodo e' esattamente nella
+      // posizione che il layout gli assegna, senza correzioni da applicare.
       const via = logoOriginRef.current;
       if (via && active.parentElement === layer) {
         via.parent.insertBefore(active, via.next);
         logoOriginRef.current = null;
       }
-      controlsRef.current = animate(flight, 0, {
-        duration: PORTRAIT_LOGO_RETURN_SECONDS,
-        ease: PORTRAIT_LOGO_EASE_OUT,
-      });
+      canali.restX.set(0);
+      canali.restY.set(0);
+      canali.xTarget.set(0);
+      canali.yTarget.set(0);
+      canali.heroHeight.set(1);
+      canali.slotHeight.set(1);
+      // NESSUNA ANIMAZIONE ANCHE QUI: il ritorno e' lo stesso moto dell'andata
+      // letto al contrario, e lo produce lo scroll scendendo. Un `animate` verso 0
+      // avrebbe potuto far concorrenza al gesto, ed e' esattamente il doppio
+      // canale che questo intervento elimina.
     },
-    [flight, logoDesktop, logoMobile, portraitRef, mobilePortraitRef],
+    [logoDesktop, logoMobile, portraitRef, mobilePortraitRef],
   );
 
   // Sottoscrizione unica che scatta solo ai cambi di stato, non a ogni frame.
@@ -608,22 +798,69 @@ export default function HeroScene({ scrollY }: { scrollY: MotionValue<number> })
   // riaprirebbe a meta' ricentratura, cioe' dentro la sagoma, e ogni passaggio
   // avanti-indietro attorno a quella quota farebbe partire e fermare il volo di
   // continuo. La banda fra le due soglie e' l'isteresi.
-  useMotionValueEvent(scrollY, 'change', (value) => {
-    const heroTop = readSceneTop('hero');
-    const nebulaTop = readSceneTop('nebula');
-    if (!heroTop || !nebulaTop) return;
-    const { start, end } = portraitRevealWindow(heroTop, nebulaTop, window.innerHeight);
-    const flyAt = end - PORTRAIT_LOGO_LEAD_PX;
+  // IL RITORNO DALLA SEZIONE LAVORI.
+  //
+  // Qui si RIPRISTINA la prima pagina, e il motivo e' che senza questo richiamo il
+  // ritorno non riproduceva l'ingresso: la sequenza partiva una volta sola, al
+  // click del preloader, e niente la richiamava, quindi tornati dalla Works la
+  // pagina si ritrovava a meta' ingresso — solo titolo e sottotitolo, avatar e
+  // coordinate assenti. Non era un flag che non veniva riletto: era che l'ingresso
+  // non aveva un'uscita.
+  //
+  // Si chiama `settleHero` e NON l'ingresso. La differenza e' tutta la questione
+  // del ritorno: l'ingresso riproduce l'ARRIVO dal preloader (il viso che entra,
+  // il testo che si compone, l'attesa della sorpresa) e ci mette secondi. Sul
+  // ritorno l'utente sta tornando a una pagina che CONOSCE, e un ritardo si
+  // legge come un difetto: il testo che si ricompone e il ritratto che sale da
+  // sotto sono esattamente il lag segnalato. `settleHero` mette tutto a posto
+  // di colpo — testo in forma finale, ritratto al suo posto, coordinate e
+  // prompt accesi — ed e' idempotente.
+  //
+  // L'arma parte DISARMATA di proposito. Armata, il richiamo sarebbe scattato al
+  // primo micro-scroll della pagina: `runHeroEntry` riavviava l'intera partitura
+  // e `prepareAvatar` rimetteva il ritratto a `translateY(12px) scale(0.96)` con
+  // `clip-path: inset(6% 0 0 0)` — cioe' tagliato in alto — mentre le righe si
+  // riaprivano. Perche' scatti solo al ritorno vero, l'arma si carica soltanto
+  // quando la pagina e' SALITA oltre la soglia di dissoluzione (`value >= start`,
+  // il ramo qui sotto), e si scarica quando torna sotto. Ogni andata e ritorno
+  // consecutivi cosi' produce un ripristino e uno solo, e non uno a ogni frame.
+  // IL RIPRISTINO AL RITORNO.
+  //
+  // Va agganciato allo STESSO istante in cui il volo si azzera, perche' e' li'
+  // che la prima pagina e' di nuovo la scena corrente. Non ha timer e non
+  // ricompone nulla: rimette a posto testo, ritratto, coordinate e prompt di
+  // colpo, quindi non introduce alcun ritardo (vedi `settleHero` in
+  // EntrySequence, che spiega perche' il ritorno non richiami l'ingresso).
+  const wasFlyingRef = useRef(false);
+  useMotionValueEvent(flight, 'change', (f) => {
+    if (f > 0) {
+      wasFlyingRef.current = true;
+      return;
+    }
+    if (!wasFlyingRef.current) return;
+    wasFlyingRef.current = false;
+    settleHero();
+  });
+
+  // DOVE STA IL NODO: il layer radice quando il volo e' in corso, la colonna
+  // dell'hero quando non lo e'.
+  //
+  // Anche questo e' derivato da `flight` e non da una soglia propria: il nodo e
+  // lo stato del volo non possono quindi trovarsi discordi. E' la condizione che
+  // rende il ritorno speculare — quando `flight` torna a 0 il nodo e' gia' nella
+  // colonna, nell'istante in cui il ritratto arriva al suo posto, e non un
+  // frame dopo (che era il lampo che si vedeva tornandogli sopra).
+  useMotionValueEvent(flight, 'change', (f) => {
     const phase = logoPhaseRef.current;
-    if (value >= flyAt) {
-      // 'home' e' inclusa: senza questo, tornati indietro e poi avanti di
-      // nuovo il marchio restava a terra perche' nessuno riarmava il volo.
+    if (f > 0) {
       if (phase !== 'away') {
         logoPhaseRef.current = 'away';
+        setInHeader(true);
         startFlight(1);
       }
-    } else if (value < start && phase === 'away') {
+    } else if (phase === 'away') {
       logoPhaseRef.current = 'home';
+      setInHeader(false);
       startFlight(-1);
     }
   });
@@ -685,7 +922,16 @@ export default function HeroScene({ scrollY }: { scrollY: MotionValue<number> })
   // avviene qui e non nella sequenza perche' e' l'hint a sapere quando e'
   // completo, e la sequenza non deve tenersi il conto di un testo che non le
   // appartiene.
+  //
+  // Qui si dichiara anche CHE LA PRIMA PAGINA E' COMPLETA. E' lo stesso
+  // istante: quando il prompt ha finito di comporsi, l'avatar ha gia' finito
+  // l'ingresso (la sorpresa e' finita da un pezzo, e' l'ingresso che viene
+  // prima), le coordinate sono scritte, e da qui l'utente puo' andare avanti.
+  // Le coordinate accendono la propria opacita' su questo segnale invece che
+  // su una soglia di scroll, cosi' tornano anche al richiamo dell'ingresso
+  // dalla sezione lavori.
   const onHintResolved = useCallback(() => {
+    announceHeroReady();
     unlockScroll();
   }, []);
 
@@ -736,7 +982,7 @@ export default function HeroScene({ scrollY }: { scrollY: MotionValue<number> })
     const node = portraitRef.current;
     const wrap = portraitWrapRef.current;
     if (!node || !wrap) return;
-    // Il wrapper e' nel flusso (nessuna `left` in percentuale, nessun
+    // Il wrapper e' nel flusso (nessuna `left` in percentuale, nessuna
     // translate(-50%)), quindi il centro a riposo si calcola dal suo box:
     // sarebbe altrimenti il bordo sinistro.
     const centerX = wrap.offsetLeft + wrap.offsetWidth / 2;
@@ -747,6 +993,19 @@ export default function HeroScene({ scrollY }: { scrollY: MotionValue<number> })
       height: node.offsetHeight,
     });
     portraitRestXRef.current = centerX;
+    // LA BASE DEL VOLO NON SI SCRIVE QUI.
+    //
+    // Questa funzione gira al mount, a ogni ResizeObserver e a ogni resize, quindi
+    // anche mentre il nodo e' nel layer — e li' il rect non e' la posizione a
+    // riposo ma quella rispetto all'origine della viewport, gia' traslata dal volo
+    // in corso. Scriverla sposterebbe la base, e il ritratto entrerebbe nel layer a
+    // coordinate sbagliate al volo successivo: misurato, la base finiva a 472,145
+    // invece di 236,145, cioe' la posizione corrente sommata due volte.
+    //
+    // La base si misura in un SOLO punto, dentro `startFlight`, e solo se il nodo
+    // non e' ancora nel layer: li' e' l'unico istante in cui la posizione di riposo
+    // e' davvero leggibile. Qui si pubblica solo la geometria per il canvas, che
+    // usa `offsetLeft/offsetTop` — valori di layout, immuni ai transform.
   }, []);
   useLayoutEffect(() => {
     syncPortraitRect();
@@ -1260,25 +1519,18 @@ export default function HeroScene({ scrollY }: { scrollY: MotionValue<number> })
     };
   }, [svgMarkup]);
 
-  // Ricentraggio: l'SVG scivola al centro insieme alla sagoma, non resta fermo a
-  // sinistra. Stessa finestra e stesso punto di partenzo del canvas, quindi i due
-  // viaggiano in sincrono e restano sovrapposti per tutto lo scorrimento. In
-  // verticale non si sposta nulla: il blocco e' gia' centrato, il delta sarebbe
-  // ~0. La finestra e il delta sono definiti piu' su, dove servono anche al volo.
+  // DOVE STA IL WRAPPER.
   //
-  // Il wrapper e' nel flesso e non ha piu' il -50%: il transform e' solo il
-  // delta del ricentraggio, nient'altro.
+  // Il wrapper NON ricentra piu': e' la camera a portare la scena al centro
+  // (vedi ParticleNebulaCanvas), quindi l'SVG deve restare dov'e' nell'hero per
+  // tutta la dissoluzione e salire dritto verso lo slot dell'header.
   //
-  // Il delta si spegne CON IL VOLO, perche' altrimenti continuerebbe a
-  // trascinare il wrapper per tutta la durata del volo (0.9s): la ricentratura
-  // non e' finita al trigger (mancano 4px) e senza questo il marchio arriverebbe
-  // nell'header con uno scarto di qualche px. La correzione non va pero' sommata
-  // qui dentro: e' gia' dentro `xTarget`, che e' uno scarto ASSOLUTO calcolato
-  // sulla posizione a riposo. Sommarla qui la conterebbe due volte.
-  const portraitX = useTransform<number, string>(
-    [recenterDelta, flight],
-    ([delta, f]) => `${(delta * (1 - f)).toFixed(2)}px`,
-  );
+  // Prima il wrapper scivolava al centro della viewport e il ritratto
+  // attraversava lo schermo: era quello il "passa dal centro" segnalato, e veniva
+  // da qui e non dalla forma della traiettoria. Con il ricentraggio spostato
+  // alla camera il wrapper non ha piu' nulla da fare, e la sua trasformazione
+  // sparisce: nessun px da correggere, nessun doppio canale, nessun lampo.
+  const portraitX = '0px';
 
   return (
     <div className="h-screen w-full bg-transparent relative overflow-hidden">
@@ -1325,8 +1577,24 @@ export default function HeroScene({ scrollY }: { scrollY: MotionValue<number> })
                 l'ancora, cosi' l'atterraggio e' esatto senza misurare la larghezza.
                 I canali sono quelli DI QUESTA istanza: il set e' per nodo, quindi
                 l'istanza che non vola non riceve nulla e resta al suo posto. */}
-            <motion.div
+            <motion.button
               ref={portraitRef}
+              type="button"
+              data-header-mark
+              tabIndex={inHeader ? 0 : -1}
+              // Le due etichette stanno QUI e non sull'elemento interno: se
+              // stessero piu' in basso, il pulsante non avrebbe nessun nome e uno
+              // screen reader direbbe solo "pulsante" a voce, che per il marchio
+              // dell'header significa non dire nulla.
+              //
+              // Nell'hero il ruolo e' quello di immagine, cosi' il nodo si presenta
+              // come prima del pulsante; nell'header e' un comando e l'etichetta
+              // diventa la sua azione. L'attributo `role` sull'interno, insieme a
+              // questa etichetta, farebbe dire al marchio "Torna alla prima pagina,
+              // immagine Ritratto animato": due nomi sovrapposti che non sono
+              // nessuna delle due cose.
+              role={inHeader ? undefined : 'img'}
+              aria-label={inHeader ? HEADER_MARK_LABEL : PORTRAIT_LABEL}
               style={{
                 opacity: avatarOpacity,
                 aspectRatio: portraitAspect,
@@ -1336,23 +1604,28 @@ export default function HeroScene({ scrollY }: { scrollY: MotionValue<number> })
                 scale: logoDesktop.scale,
                 zIndex: logoDesktop.zIndex,
                 transformOrigin: '0 0',
+                // Il layer radice che ospita il marchio ha `pointer-events: none`
+                // per non intercettare nulla, ma un discendente che li riaccende
+                // continua a riceverli: basta il figlio, il layer resta intatto.
+                pointerEvents: inHeader ? 'auto' : 'none',
               }}
-              className="relative h-auto"
+              // `block` esplicitamente: il nodo era un `div` e il `button` che lo
+              // sostituisce nasce `inline-block`. Il preflight azzera padding e
+              // bordi, ma non il display, e da inline il ritratto si appoggerebbe
+              // sulla baseline aggiungendo sotto di se' lo spazio del descender:
+              // qualche pixel che sposterebbe l'hero e la sagoma del canvas.
+              className={`relative block h-auto ${inHeader ? 'cursor-pointer' : ''}`}
             >
               <div
                 ref={registerFaceHost}
                 data-face-host="desktop"
-                // Il ritratto e' un'immagine che si muove, non testo: senza questi
-                // attributi uno screen reader ci troverebre dentro centinaia di
-                // path SVG e direbbe "gruppo", "percorso", "gruppo", per quello che
-                // e' un volto. `role="img"` con l'etichetta lo collassa a una
-                // cosa sola e dicibile.
-                role="img"
-                aria-label="Ritratto animato di Max Caggiano"
+                // Il nome e il ruolo sono sul pulsante che avvolge questo div,
+                // non qui dentro: due etichette sovrapposte farebbero
+                // descrivere il ritratto due volte. Qui resta solo il volto.
                 className={SVG_FIT_CLASSES}
                 dangerouslySetInnerHTML={{ __html: svgMarkup }}
               />
-            </motion.div>
+            </motion.button>
           </motion.div>
 
           {/* Testo: seconda colonna, allineato a sinistra (bandiera). Il
@@ -1515,8 +1788,17 @@ export default function HeroScene({ scrollY }: { scrollY: MotionValue<number> })
               sotto md. Anche qui i canali sono quelli dell'istanza: senza, il
               volo del desktop scriveva su questo nodo e il layout mobile mostrava
               un secondo ritratto trascinato fuori posto. */}
-          <motion.div
+          <motion.button
             ref={mobilePortraitRef}
+            type="button"
+            data-header-mark
+            tabIndex={inHeader ? 0 : -1}
+            // Stessa etichetta e stessa logica della versione desktop, e per lo
+            // stesso motivo le due istanze non possono descriversi diverse: uno
+            // screen reader riceverebbe due nomi per lo stesso volto e uno dei due
+            // cambierebbe in base alla larghezza della finestra.
+            role={inHeader ? undefined : 'img'}
+            aria-label={inHeader ? HEADER_MARK_LABEL : PORTRAIT_LABEL}
             style={{
               opacity: avatarOpacity,
               aspectRatio: portraitAspect,
@@ -1526,31 +1808,39 @@ export default function HeroScene({ scrollY }: { scrollY: MotionValue<number> })
               scale: logoMobile.scale,
               zIndex: logoMobile.zIndex,
               transformOrigin: '0 0',
+              pointerEvents: inHeader ? 'auto' : 'none',
             }}
-            className="relative h-auto"
+            // `block` per lo stesso motivo della versione desktop: il nodo era un
+            // `div` e il preflight non azzera il display di un `button`.
+            className={`relative block h-auto ${inHeader ? 'cursor-pointer' : ''}`}
           >
             <div
               ref={registerFaceHost}
               data-face-host="mobile"
-              // Stessa etichetta della versione desktop: le due istanze non
-              // possono descriversi diversi, altrimenti un screen reader
-              // riceverebbe due nomi per lo stesso volto e uno dei due
-              // cambierebbe in base alla larghezza della finestra.
-              role="img"
-              aria-label="Ritratto animato di Max Caggiano"
+              // Il nome e il ruolo sono sul pulsante che avvolge questo div,
+              // non qui dentro: due etichette sovrapposte farebbero descrivere
+              // il marchio due volte. Qui resta solo il volto, che e il contenuto.
               className={SVG_FIT_CLASSES}
               dangerouslySetInnerHTML={{ __html: svgMarkup }}
             />
-          </motion.div>
+          </motion.button>
         </motion.div>
       </div>
 
-      <ScrollHint
-        opacity={dissolveOpacity}
-        autoStart={false}
-        scrambleText="[SCORRI PER DISSOLVERE ↓]"
-        onResolved={onHintResolved}
-      >[SCORRI PER DISSOLVERE ↓]</ScrollHint>
+      {/* Il prompt di scorrimento dell'hero: si ACCENDE e resta animato in idle,
+          non si compone. Il cambio caratteri e' la tecnica per un titolo che
+          arriva (le righe dell'headline), mentre qui il testo e' gia' noto e deve
+          solo comparire quando la pagina e' pronta: entrarlo con i simboli lo
+          faceva leggere come un altro titolo che si sta scrivendo.
+
+          Resta `autoStart={false}` perche' l'ordine richiesto e' che il prompt
+          compaia DOPO l'ingresso dell'avatar: a chiamarlo e' la sequenza, al suo
+          tempo (ENTRY_CONFIG.scrollHintStart), non il componente al mount. E'
+          esattamente il modello degli altri hint della pagina (vedi NebulaScene),
+          con la stessa classe `.scroll-hint-pulse` che li tiene animati in idle. */}
+      <ScrollHint opacity={dissolveOpacity} autoStart={false} onResolved={onHintResolved}>
+        [SCORRI PER DISSOLVERE ↓]
+      </ScrollHint>
     </div>
   );
 }

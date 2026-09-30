@@ -11,6 +11,31 @@
 
 export type EntryState = 'preloader' | 'entering' | 'hero';
 
+// IL FLAG "PRIMA PAGINA COMPLETA".
+//
+// Un solo interruttore per la domanda "l'hero e' completo?". Prima l'opacita'
+// dell'avatar e delle coordinate era calcolata da soglie di SCROLL: a scroll 0,
+// cioe' la posizione di riposo dopo il preloader e il punto in cui il magnete
+// riporta la pagina al ritorno dalla Works, quelle formule davano 0. Il
+// risultato era che al ritorno restavano solo titolo e sottotitolo (che vivono
+// in un contenitore `fixed` e non dipendono dalla posizione) e sparivano
+// avatar e coordinate. L'ingresso non era "pensato per una sola esecuzione":
+// era che la sua visibilita' non era governata da nessuno stato.
+//
+// Qui il flag e' l'unico posto che decide. Lo mette l'orchestratore a fine
+// ingresso e lo toglie quando l'hero comincia a dissolversi, quindi chiunque
+// abbia bisogno di sapere se la prima pagina e' intera chiede, e non calcola.
+let heroReady = false;
+
+export const isHeroReady = (): boolean => heroReady;
+
+/** true solo al passaggio di stato: chiamarlo due volte non ripete nulla. */
+export const setHeroReady = (ready: boolean): void => {
+  if (heroReady === ready) return;
+  heroReady = ready;
+  if (isAudioDebug()) console.info(`[entry] heroReady: ${ready}`);
+};
+
 /**
  * true se l'URL porta il flag indicato.
  *

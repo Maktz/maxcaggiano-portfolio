@@ -422,6 +422,46 @@ export default function ParticleNebulaCanvas() {
       };
     };
 
+    // IL RECT REALE DELL'AVATAR.
+    //
+    // La sagoma deve nascere DOVE STA l'SVG e alla SUA scala, quindi serve il
+    // rettangolo reale, non una costante: `getBoundingClientRect` sul nodo
+    // dell'avatar, letto dal vivo. E' anche il posto giusto per il fallback —
+    // se il nodo non c'e' (primi frame, o un layout senza ritratto) si ricade
+    // sulla geometria pubblicata da HeroScene, che a sua volta ha un proprio
+    // fallback a costanti. Nessun px scritto a mano: la posizione segue il DOM.
+    const readAvatarRect = (): { x: number; y: number; width: number; height: number } => {
+      // Si cercano TUTTE le istanze e si prende la prima con un rettangolo
+      // reale, non la prima che esiste nel DOM.
+      //
+      // Il nodo nascosto esiste comunque: su mobile l'istanza desktop e' in
+      // `display: none`, quindi `querySelector` la trova e restituisce un rect a
+      // zero. Con il solo `??` — che scatta solo quando il nodo non esiste — la
+      // sagoma leggeva quel rect vuoto e non passava MAI all'istanza mobile, che
+      // e' quella visibile: il fallback finiva sulla geometria pubblicata, che
+      // descrive l'altra colonna. Risultato misurato: su 390x844 la sagoma nasceva
+      // a (35, 97) invece che a (195, 422), cioe' 160px a sinistra e 325px in
+      // alto rispetto all'avatar, mentre su desktop e 1512 era corretta.
+      for (const node of document.querySelectorAll<HTMLElement>('[data-face-host]')) {
+        const box = node.getBoundingClientRect();
+        if (box.width > 0 && box.height > 0) {
+          return { x: box.x, y: box.y, width: box.width, height: box.height };
+        }
+      }
+      const published = readPortraitGeometry();
+      if (published && published.width > 0 && published.height > 0) {
+        // `published.x/y` sono il CENTRO a riposo: si riportano al bordo perche'
+        // il chiamante lavora con un rect in stile DOM.
+        return {
+          x: published.x - published.width / 2,
+          y: published.y - published.height / 2,
+          width: published.width,
+          height: published.height,
+        };
+      }
+      return { x: 0, y: 0, width: 0, height: 0 };
+    };
+
     const makeParticle = (
       index: number,
       x: number,
@@ -802,7 +842,7 @@ export default function ParticleNebulaCanvas() {
       // Finestra CONDIVISA con il fade del ritratto: se il rilascio delle
       // particelle e la dissoluzione dell'SVG usassero due finestre diverse, il
       // ritratto svanirebbe mentre i puntini non ci sono ancora.
-      const { start: revealStart, end: revealEnd } = portraitRevealWindow(heroTop, nebulaTop, height);
+      const { start: revealStart, end: revealEnd } = portraitRevealWindow(heroTop, nebulaTop);
       const genesis = smoothstep(phase(scrollY, revealStart, revealEnd));
       // La curva mantiene lo STEMPO della dissoluzione, ma evita che i punti piu
       // profondi spariiscano troppo tardi rispetto ai punti in primo piano.
@@ -821,20 +861,71 @@ export default function ParticleNebulaCanvas() {
         ? 1
         : 1 - (1 + SHAPE_SPRING_DAMPING * shapeScaleLinear) *
           Math.exp(-SHAPE_SPRING_DAMPING * shapeScaleLinear);
-      // Stessa finestra di ricentraggio usata dall'SVG in HeroScene, calcolata
-      // dalla funzione condivisa: se i due usassero finestre diverse, il
-      // ritratto e la sagoma si separerebbero di qualche px durante lo
-      // scorrimento e le particelle smetterebbero di combaciare col ritratto.
-      const recenterLinear = shapeRecenterPhase(scrollY, nebulaTop, height);
-      // portrait.x/y sono gia' il centro a riposo. Le coordinate world sono
-      // relative a quel punto, quindi a riposo la sagoma e' gia' sull'SVG senza
-      // correzioni. Lo spostamento al centro e' un offset separato che cresce da
-      // 0 a 1 con il ricentraggio, applicato sia al canvas sia al DOM.
-      const portraitBox = getPortrait();
-      const portraitCenterX = portraitBox.x;
-      const portraitCenterY = portraitBox.y;
-      const shapeShiftX = (width / 2 - portraitCenterX) * recenterLinear;
-      const shapeShiftY = (height / 2 - portraitCenterY) * recenterLinear;
+      // ── LA CAMERA: PARTE SULL'AVATAR, POI RICENTRA ───────────────────────
+      //
+      // Il difetto che questo blocco corregge: la scena partiva gia' CENTRATA e
+      // alla scala finale, quindi le particelle comparivano al centro dello
+      // schermo mentre l'avatar stava a sinistra — un salto visibile fra l'uno e
+      // l'altro. Lo spostamento al centro era un offset applicato DOPO, a
+      // `recenterLinear`, cioe' cresceva da 0 a 1 durante l'allargamento: la
+      // sagoma quindi non era "sull'avatar che svanisce" ma "una nuvola che
+      // nasce al centro e si allarga".
+      //
+      // Ora la camera parte gia' spostata sul ritratto. `cameraOffsetX/Y` e' lo
+      // scarto fra il CENTRO DELL'AVATAR e il centro della viewport, e la camera lo
+      // applica inizialmente: a progress 0 la sagoma e' esattamente dove sta
+      // l'SVG, alla sua scala, e il passaggio avatar → particelle non ha salti.
+      // Poi lo scarto va a 0 mentre la scala cresce, e la scena si ricentra con
+      // uno zoom verso sinistra — che e' il movimento richiesto, e non piu' uno
+      // spostamento secco a meta' percorso.
+      //
+      // Il centro dell'avatar viene letto dal RECT REALE (`getBoundingClientRect`)
+      // del nodo, non da costanti: cosi' la sagoma segue l'avatar anche quando il
+      // layout lo sposta (breakpoint, font, larghezza). Il rettangolo e' in
+      // coordinate di viewport, che e' lo spazio in cui la camera ragiona.
+      const portraitRect = readAvatarRect();
+      const avatarCenterX = portraitRect.x + portraitRect.width / 2;
+      const avatarCenterY = portraitRect.y + portraitRect.height / 2;
+      // Il delta richiesto: centro avatar MENO centro viewport, su X e Y. La camera
+      // lo applica inizialmente, cosi' la sagoma nasce sull'avatar.
+      const cameraOffsetX = avatarCenterX - width / 2;
+      const cameraOffsetY = avatarCenterY - height / 2;
+      // `recenterLinear` adesso guida solo il passaggio "dall'avatar al centro",
+      // non l'intera posizione: a 0 la camera e' sull'avatar, a 1 e' centrata.
+      // Il ricentraggio e' una funzione del SOLO progress dello scroll: a 0 la
+      // camera e' sull'avatar (la sagoma nasce sul disegno), a 1 e' centrata sulla
+      // viewport. Easing ease-in-out esplicito con smoothstep: parte lenta,
+      // accelera, finisce lenta, quindi il ricentraggio non parte di scatto appena
+      // l'SVG sparisce. Non c'e' nessun clock: lo scrub e' gia' il progress.
+      // La finestra NON e' piu' quella del ricentraggio: e' la stessa del VOLO
+      // dell'avatar, letta da `portraitFlightWindow`. Il parametro `height` non
+      // serve piu' e l'argomento e' sparito dalla firma perche' una finestra in
+      // quota di viewport non puo' coincidere con una in quota di dissoluzione:
+      // e' proprio li' che i due movimenti si disfacevano al ritorno.
+      const recenterLinear = shapeRecenterPhase(scrollY, heroTop, nebulaTop);
+      const recenterCurve = recenterLinear * recenterLinear * (3 - 2 * recenterLinear);
+      // LO SCARTO RESIDUO DEL DISEGNO e' l'INVERSO dello scarto della camera, e va
+      // da 0 a `-cameraOffset`.
+      //
+      // Il centro di partenza e' gia' quello dell'avatar (ogni particella e'
+      // disegnata attorno ad `avatarCenterX/Y`), quindi all'inizio non si sposta
+      // niente: `shapeShift` e' 0 e la sagoma nasce esattamente sul disegno
+      // dell'SVG, alla sua scala, senza salti. Man mano che la camera si ricentra
+      // (`recenterCurve` 0 → 1) il disegno slitta della quantita' opposta, cosi'
+      // alla fine il centro della sagoma e' quello della viewport:
+      // centro avatar + (centro viewport − centro avatar) = centro viewport.
+      //
+      // Il SEGNO e' la parte che conta, e il commento qui sotto diceva il
+      // contrario di quello che il codice faceva: con `+cameraOffset × (1 −
+      // curve)` la sagoma partiva da `2 × centro avatar − centro viewport` e
+      // finiva ferma sul centro dell'avatar — cioe' non nasceva sull'avatar e non
+      // si ricentrava. Il delta richiesto e' proprio l'opposto di quello che
+      // veniva sommato.
+      const shapeShiftX = -cameraOffsetX * recenterCurve;
+      const shapeShiftY = -cameraOffsetY * recenterCurve;
+      // La scala: parte a 1 (la scala REALE dell'avatar, perche' le particelle
+      // nascono sul suo disegno alla sua dimensione) e cresce fino a riempire il
+      // viewport. `SHAPE_SCALE` e' il fattore finale, invariato.
       const shapeScale = 1 + (SHAPE_SCALE - 1) * shapeScaleProgress;
       // Camera Z = funzione lineare esclusiva dello scroll. Non esiste un clock
       // nel renderer e non viene applicato smoothing: scroll fermo => camera ferma.
@@ -923,8 +1014,14 @@ export default function ParticleNebulaCanvas() {
           ) * flowAmplitude;
           const worldX = particle.worldX + flowX + autonomousX;
           const worldY = particle.worldY + flowY + autonomousY;
-          const x = portraitCenterX + shapeShiftX + worldX * perspective * shapeScale;
-          const y = portraitCenterY + shapeShiftY + worldY * perspective * shapeScale;
+          // Il centro di partenza e' quello dell'AVATAR e resta tale finche' la
+          // camera non ricentra: per questo qui si somma solo lo scarto residuo
+          // `shapeShift`, che a progress 0 e' 0 — la sagoma e' gia' sull'SVG, alla
+          // sua scala — e a fine percorso vale il delta richiesto, cioe' il
+          // ricentraggio. Nessun ricalcolo delle particelle: cambiano solo i due
+          // numeri della camera, quindi il costo per frame e' lo stesso.
+          const x = avatarCenterX + shapeShiftX + worldX * perspective * shapeScale;
+          const y = avatarCenterY + shapeShiftY + worldY * perspective * shapeScale;
           const radius = particle.radius * perspective * shapeScale;
           // Una particella resta a fuoco finché non viene rilasciata dalla
           // sagoma. Il seed distribuisce il rilascio durante il viaggio Z.
@@ -994,10 +1091,14 @@ export default function ParticleNebulaCanvas() {
               const sampleDenominator = FOCAL_LENGTH + sampleZ - cameraZ;
               if (sampleDenominator <= FOCAL_LENGTH * 0.1) continue;
               const samplePerspective = FOCAL_LENGTH / sampleDenominator;
-              const sampleX = width / 2 + (
+              // Stessa origine del nucleo, altrimenti la scia si staccherebbe
+              // dalla particella che la genera durante il ricentraggio: qui il
+              // centro e' quello dell'avatar piu' lo scarto residuo, identico
+              // al calcolo sopra e per le stesse ragioni.
+              const sampleX = avatarCenterX + shapeShiftX + (
                 particle.worldX + flowX + sampleAutonomousX
               ) * samplePerspective * shapeScale;
-              const sampleY = height / 2 + (
+              const sampleY = avatarCenterY + shapeShiftY + (
                 particle.worldY + flowY + sampleAutonomousY
               ) * samplePerspective * shapeScale;
               const sampleRadius = particle.radius * samplePerspective * shapeScale;

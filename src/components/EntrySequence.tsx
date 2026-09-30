@@ -15,6 +15,13 @@ import {
   SCRAMBLE_SUBHEADLINE_SELECTOR,
 } from '@/lib/entryCopy';
 import { unlockScroll } from '@/lib/scrollLock';
+import {
+  announceHeroReady,
+  clearHeroEntry,
+  clearHeroReady,
+  registerHeroEntry,
+  registerHeroSettle,
+} from '@/lib/heroEntryControl';
 import { rocketManager } from '@/lib/rocketManager';
 import { markHeroForAmbientRockets } from '@/lib/stickerRockets';
 import { reducedMotion } from '@/lib/motionPreference';
@@ -73,6 +80,15 @@ const pending: Array<{ at: number; run: () => void; fired: boolean }> = [];
 let rocketLaunched = false;
 let rocketPassAnnounced = false;
 
+/** Apre il blocco dell'ingresso: riparte da zero, a qualunque ingresso. */
+const resetEntryRun = (): void => {
+  timers.forEach((id) => window.clearTimeout(id));
+  timers.length = 0;
+  pending.length = 0;
+  rocketLaunched = false;
+  rocketPassAnnounced = false;
+};
+
 /**
  * Sposta il focus sull'headline, che e' la prima cosa che l'utente deve
  * incontrare della pagina.
@@ -118,6 +134,16 @@ export default function EntrySequence() {
   // sequenza venisse riavviata. Senza, un viaggio interrotto a meta' lascerebbe
   // il logo a mezz'aria con l'opacita' a zero e l'header ancora nascosto.
   const flightRef = useRef<AnimationPlaybackControls | null>(null);
+
+  // Il RICHIAMO DALL'ESTERNO. Il ritorno dalla sezione lavori non passa dallo
+  // stato d'ingresso (che e' gia' `hero` e non cambia piu'), quindi serve una
+  // via che dica "riporta la prima pagina al suo stato completo" senza passare
+  // dal preloader. E' la stessa funzione che il click usa: non una scorciatoia
+  // e una seconda coreografia, ma lo stesso ingresso, richiamato.
+  //
+  // In una ref e non in uno stato perche' non produce markup: quello che serve
+  // al chiamante e' poterlo invocare, non leggerlo da un render.
+  const runEntryRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     /**
@@ -316,6 +342,55 @@ export default function EntrySequence() {
       });
     };
 
+    /**
+     * RIPRISTINA LA PRIMA PAGINA, di colpo. E' la via del RITORNO dalla sezione
+     * lavori, non quella dell'ARRIVO: l'ingresso riproduce il primo arrivo e ci
+     * mette secondi, e sul ritorno quei secondi sono il lag che l'utente ha
+     * segnalato.
+     *
+     * Quindi qui nessuna animazione e nessun timer: ogni pezzo viene messo nella
+     * sua forma FINALE, che e' l'unica forma che la pagina deve avere quando si
+     * torna. Il testo e' gia' risolto e non lo si tocca, il ritratto torna al suo
+     * posto senza salire dal bordo, coordinate e prompt si accendono.
+     *
+     * Idempotente per costruzione: ogni passo mette a posto qualcosa che o e'
+     * gia' a posto o puo' essere rimesso a posto quante volte si vuole, quindi un
+     * richiamo in piu' non lascia la pagina in uno stato diverso.
+     */
+    const settleHero = (): void => {
+      // Il ritratto: `showAvatarImmediately` toglie il `clip-path` e la
+      // traslazione dell'ingresso e lo rende visibile al suo posto. NON si chiama
+      // `prepareAvatar`: quello nasconderebbe il viso e rimetterebbe il
+      // restringimento, che e' esattamente cio' che al ritorno non deve accadere.
+      showAvatarImmediately();
+      // Il viso torna a riposo: se l'utente era andato via durante la sorpresa,
+      // la posa era ancora quella degli occhi spalancati.
+      avatarController.setPose('riposo', { duration: 0 });
+      // Le quattro righe nella forma finale. `settleRow` scrive il testo e toglie
+      // il `visibility: hidden` del nodo, quindi non serve altro perche' il titolo
+      // torni leggibile.
+      starts.forEach((_, index) => settleRow(index));
+      // Le coordinate: stessa via del titolo. Non si riscrivono carattere per
+      // carattere perche' al ritorno non sono un arrivo ma una rilettura.
+      COORD_TEXTS.forEach((_, index) => {
+        const node = document.querySelector<HTMLElement>(COORD_SELECTORS[index]);
+        if (node) new ScrambleController({ target: COORD_TEXTS[index], node, mode: 'write', variance: 0 }).settle();
+      });
+      // Il prompt e' gia' scritto: si accende e basta. Nessuno scramble, quindi
+      // l'hint resta quello che e' sempre stato, con la sua animazione in idle.
+      startScrollHint();
+      // La pagina e' intera, quindi lo si dichiara: e' il segnale che accende
+      // l'opacita' delle coordinate e che sblocca lo scroll. `announceHeroReady` e'
+      // idempotente, quindi chiamarla qui e' sicuro anche se la pagina era gia'
+      // stata dichiarata completa.
+      announceHeroReady();
+      // Lo sblocco: al ritorno l'utente sta gia' scrollando, quindi non c'e' da
+      // aspettare nessun prompt — ma la chiamata e' innocuo (idempotente) e
+      // garantisce che la pagina resti sbloccata anche se qualcuno l'avesse
+      // bloccata per strada.
+      unlockScroll();
+    };
+
     const runScramble = (rowIndex: number) => {
       const target = SCRAMBLE_ROWS[rowIndex];
       const rowId = SCRAMBLE_ROW_IDS[rowIndex];
@@ -477,13 +552,43 @@ export default function EntrySequence() {
         );
       });
 
-      // t=2.00 — IL RAZZO, e con lui la sorpresa e il sorriso.
+      // t=0.75 — LA SORPRESA, durante l'apparizione dell'avatar.
       //
-      // Sorpresa e sorriso non hanno piu' un orario: nascono dagli eventi reali
-      // del razzo. Il viso reagisce a una cosa che sta accadendo, non a un
-      // secondo che e' passato. E' l'unica parte della partitura che ascolta
-      // il mondo invece di scandire il tempo, ed e' per questo che sta qui e non
-      // dentro l'avatar.
+      // Prima nasceva insieme al razzo (t=2.00), cioe' un secondo e mezzo dopo
+      // che l'avatar aveva gia' atterrato: non era "durante l'ingresso" ma un
+      // richiamo tardivo, e durava 200ms, troppo pochi per essere percepiti.
+      // Ora ha un orario proprio, parte mentre l'avatar sta ancora salendo e
+      // tiene l'espressione abbastanza da essere LETTA. La posa non e' nuova:
+      // e' `sorpresa` gia' dichiarata in ENTRY_CONFIG (occhi spalancati,
+      // sopracciglia alzate, bocca socchiusa), quindi si riusa un pezzo
+      // esistente invece di costruirne uno parallelo.
+      schedule(ENTRY_CONFIG.avatarSurpriseStart, () => {
+        avatarController.setPose('sorpresa', {
+          duration: ENTRY_CONFIG.avatarSurpriseDuration,
+        });
+      });
+
+      // Il viso NON torna di scatto al riposo quando la sorpresa finisce: si
+      // scioglie. Il ritorno e' una posa a tutti gli effetti, quindi va
+      // schedulato come una fase, altrimenti l'occhi spalancati resterebbero
+      // fino all'idle di 3.40 e la sorpresa sembrerebbe durare tre secondi.
+      schedule(
+        ENTRY_CONFIG.avatarSurpriseStart +
+          ENTRY_CONFIG.avatarSurpriseDuration / 1000,
+        () =>
+          avatarController.setPose('riposo', {
+            duration: ENTRY_CONFIG.avatarSurpriseToIdleDuration,
+          }),
+      );
+
+      // t=2.00 — IL RAZZO.
+      //
+      // Il suo orario e' FIXO e non e' stato toccato. Cambia solo che il viso non
+      // reagisce piu' al suo lancio: la sorpresa e' adesso un gesto dell'ingresso
+      // e sta piu' in alto, durante l'apparizione. Il movimento del razzo, la sua
+      // corsia, lo sguardo che lo segue a ogni frame e il sorriso all'uscita
+      // sono esattamente quelli di prima — non e' stato toccato nulla del suo
+      // motore, solo la coreografia dell'espressione.
       schedule(ENTRY_CONFIG.rocketScriptedStart, () => {
         if (rocketLaunched) return;
         rocketLaunched = true;
@@ -519,11 +624,10 @@ export default function EntrySequence() {
             });
           },
         });
-        // La sorpresa e' l'entrata del razzo: parte insieme al lancio, non a un
-        // secondo fisso che cascherebbe vicino ma non per causa del razzo.
-        avatarController.setPose('sorpresa', {
-          duration: ENTRY_CONFIG.avatarSurpriseDuration,
-        });
+        // Qui NON c'e' piu' la sorpresa: e' schedulata piu' in alto, insieme
+        // all'apparizione dell'avatar. Reagire al lancio del razzo era cio' che
+        // la faceva arrivare quando l'ingresso era gia' finito da un secondo e
+        // mezzo, e la faceva durare troppo poco per essere letta.
       });
 
       // t=3.10 — L'IDLE RIPARTE.
@@ -634,6 +738,12 @@ export default function EntrySequence() {
       // mostrerebbe il viso gia' nella sua posizione finale, cioe' il
       // restringimento che l'ingresso doveva evitare.
       prepareAvatar();
+      // Ripartire da zero e' la PREMESSA dell'ingresso ripetibile: senza,
+      // `pending` terrebbe le fasi dell'ingresso precedente (gia' segnate come
+      // partite) e il pump le riscriverebbe sopra quelle nuove, producendo una
+      // partitura a doppiofondo. Azzerare anche i flag del razzo e' quello che
+      // gli permette di ripartire al ritorno dalla Works.
+      resetEntryRun();
       buildTimeline();
 
       // Il pump gira finche' la partitura non e' vuota. Lo sblocco NON avviene
@@ -666,6 +776,16 @@ export default function EntrySequence() {
     };
 
     const unsubscribe = entryState.subscribe(onState);
+    // Il richiamo esterno per l'ARRIVO: e' la stessa funzione che il click usa,
+    // non un doppio ingresso, cosi' la prima pagina non puo' essere completa in un
+    // modo al primo ingresso e in un altro al richiamo.
+    runEntryRef.current = () => onState('entering');
+    registerHeroEntry(runEntryRef.current);
+    // Il richiamo esterno per il RITORNO: NON e' l'ingresso. Sul ritorno l'utente
+    // torna a una pagina che conosce, e riprodurre l'arrivo (il testo che si
+    // ricompone, il ritratto che sale dal bordo) si legge come un lag. Qui si
+    // rimette a posto quello che c'era gia', di colpo e senza attese.
+    registerHeroSettle(settleHero);
     // Sotto `?skip` lo stato iniziale e' GIA' `hero`: non e' una transizione,
     // quindi nessun ascolto la vedra' passare, e il clock del gate dei razzi
     // ambient resterebbe fermo sull'epoca, cioe' sempre scaduto. Senza questa
@@ -695,6 +815,14 @@ export default function EntrySequence() {
   // loro stato di riposo e' l'unico modo in cui lo smontaggio non si vede.
   useEffect(
     () => () => {
+      // Il ponte verso l'esterno: senza questa disiscrizione, un HeroScene
+      // ancora montato chiamerebbe l'ingresso di un orchestratore smontato e
+      // scriverebbe su nodi che non esistono piu'.
+      clearHeroEntry();
+      // I listener della fine ingresso, per lo stesso motivo: sono callback che
+      // scrivono su scene vive, e dopo lo smontamento non hanno piu' niente su
+      // cui scrivere.
+      clearHeroReady();
       // I timer della partitura: senza questo, un componente che smonta a
       // meta' sequenza lascerebbe il pump vivo e le sue fasi continuerebbero a
       // scrivere su nodi che non esistono piu'.

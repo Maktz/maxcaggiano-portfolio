@@ -25,7 +25,7 @@ export default function ProjectModal({ project, onClose }: ProjectModalProps) {
       // data-lenis-prevent: lo scroll interno della scheda resta nativo e non
       // viene né intercettato da Lenis né impaginato dal paging.
       data-lenis-prevent
-      className="fixed inset-0 z-50 bg-canvas overflow-y-auto"
+      className="fixed inset-0 z-[70] bg-canvas overflow-y-auto"
     >
       <motion.div
         initial={{ y: -20, opacity: 0 }}
@@ -35,7 +35,7 @@ export default function ProjectModal({ project, onClose }: ProjectModalProps) {
       >
         <button onClick={onClose} className="group flex items-center gap-2 font-mono text-xs md:text-sm tracking-widest text-swiss-pink hover:text-swiss-pink transition-colors">
           <ArrowLeft className="w-4 h-4 group-hover:-translate-x-1 transition-transform" />
-          [BACK TO PROJECTS]
+          [TORNA AI PROGETTI]
         </button>
         <button onClick={onClose} className="text-swiss-pink hover:text-swiss-pink transition-colors">
           <X className="w-5 h-5" />
@@ -63,10 +63,10 @@ export default function ProjectModal({ project, onClose }: ProjectModalProps) {
 
         <div className="grid-master mb-12 md:mb-16">
           {[
-            { label: 'CLIENT', value: project.client },
-            { label: 'ROLE', value: project.role },
-            { label: 'TIMELINE', value: project.timeline },
-            { label: 'DELIVERABLES', value: project.deliverables.join(', ') },
+            { label: 'CLIENTE', value: project.client },
+            { label: 'RUOLO', value: project.role },
+            { label: 'TEMPISTICA', value: project.timeline },
+            { label: 'CONSEGNE', value: project.deliverables.join(', ') },
           ].map((row, i) => (
             <motion.div key={row.label} initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.2 + i * 0.08, duration: 0.5 }}
               className="col-span-4 md:col-span-12 grid grid-cols-2 md:grid-cols-12 gap-4 border-b border-swiss-pink/20 py-4">
@@ -78,11 +78,11 @@ export default function ProjectModal({ project, onClose }: ProjectModalProps) {
 
         <div className="grid-master mb-12 md:mb-16">
           <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3, duration: 0.6 }} className="col-span-4 md:col-span-8">
-            <div className="font-mono text-xs tracking-widest text-swiss-pink mb-4">[ART DIRECTION STATEMENT]</div>
+            <div className="font-mono text-xs tracking-widest text-swiss-pink mb-4">[DICHIARAZIONE DI DIREZIONE ARTISTICA]</div>
             <p className="font-display text-xl md:text-2xl leading-relaxed text-accent">{project.strategy}</p>
           </motion.div>
           <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4, duration: 0.6 }} className="col-span-4 md:col-span-4 md:col-start-9">
-            <div className="font-mono text-xs tracking-widest text-swiss-pink mb-4">[TAGS]</div>
+            <div className="font-mono text-xs tracking-widest text-swiss-pink mb-4">[TAG]</div>
             <div className="flex flex-wrap gap-2">
               {project.tags.map((tag) => (
                 <span key={tag} className="font-mono text-[10px] tracking-widest border border-swiss-pink/40 px-2 py-1 text-swiss-pink">[{tag}]</span>
@@ -92,7 +92,7 @@ export default function ProjectModal({ project, onClose }: ProjectModalProps) {
         </div>
 
         <div className="grid-master mb-12 md:mb-16">
-          <div className="col-span-4 md:col-span-12 font-mono text-xs tracking-widest text-swiss-pink mb-6">[VISUAL GALLERY]</div>
+          <div className="col-span-4 md:col-span-12 font-mono text-xs tracking-widest text-swiss-pink mb-6">[GALLERIA]</div>
           {project.galleryImages.map((img, i) => (
             <motion.div key={i} initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.4 + i * 0.15, duration: 0.6 }}
               className={`col-span-4 ${i === 0 ? 'md:col-span-8' : i === 1 ? 'md:col-span-4' : 'md:col-span-12'} grid-wireframe overflow-hidden bg-dark-green/30`}>
@@ -103,7 +103,7 @@ export default function ProjectModal({ project, onClose }: ProjectModalProps) {
 
         <div className="grid-master mb-12 md:mb-16">
           <motion.div initial={{ opacity: 0, y: 40 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5, duration: 0.6 }} className="col-span-4 md:col-span-12 bg-dark-green p-8 md:p-16">
-            <div className="font-mono text-xs tracking-widest text-swiss-pink mb-6 md:mb-8">[KEY METRICS]</div>
+            <div className="font-mono text-xs tracking-widest text-swiss-pink mb-6 md:mb-8">[METRICHE]</div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-8 md:gap-12">
               {project.metrics.map((m, i) => (
                 <div key={i}>
@@ -119,7 +119,7 @@ export default function ProjectModal({ project, onClose }: ProjectModalProps) {
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.6, duration: 0.5 }} className="col-span-4 md:col-span-12 flex justify-center">
             <a href={project.liveUrl} target="_blank" rel="noopener noreferrer"
               className="group flex items-center gap-3 bg-dark-green text-swiss-pink font-mono text-sm md:text-base tracking-widest px-8 md:px-12 py-4 md:py-5 hover:bg-dark-green hover:text-swiss-pink border border-swiss-pink transition-colors">
-              [LAUNCH LIVE EXPERIENCE
+              [APRI L'ESPERIENZA LIVE
               <ArrowUpRight className="w-5 h-5 group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />
               ]
             </a>

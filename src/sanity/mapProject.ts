@@ -63,7 +63,7 @@ const stringList = (values: unknown): string[] => {
  * Se l'editor ha compilato il campo `kpi` in Sanity, quello vince: è testo
  * scritto per essere mostrato lì e non va riformattato. Altrimenti si deriva
  * dal PRIMO keyMetrics, concatenando valore ed etichetta, perché il badge in
- * alto e il primo numero dei "KEY METRICS" in fondo sono lo stesso dato detto
+ * alto e il primo numero delle "[METRICHE]" in fondo sono lo stesso dato detto
  * due volte e devono dire la stessa cosa.
  */
 const deriveKpi = (project: SanityProject, keyMetrics: SanityKeyMetric[]): string => {
