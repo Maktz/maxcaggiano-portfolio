@@ -182,6 +182,15 @@ export default function PreloaderScene({ onHero }: { onHero?: () => void }) {
         <TransmissionButton
           label="AVVIA TRASMISSIONE"
           onClick={handleEnter}
+          // `reaction={null}` e non il default a stelle: questo pulsante non
+          // reagisce, avvia. Il default di `TransmissionButton` e' `stars`, e la
+          // sequenza dura circa 3,4 secondi mentre la reazione dura 1,6: partendo
+          // dal click, le stelle finivano ANCORA accese quando l'avatar entrava
+          // nell'hero, e l'utente entrava nella prima pagina con gli occhi a
+          // stella senza aver chiesto nulla. Il motivo del `null` e' il solo posto
+          // in cui la reazione non e' visibile: nel preloader l'avatar non si
+          // vede, quindi sparirebbe nel vuoto e si riaccenderebbe nell'hero.
+          reaction={null}
           // Fuori scena il pulsante e' disabilitato e fuori dal Tab order PRIMA
           // che il contenitore diventi `inert`. Sono due difese e non una: `inert`
           // non e' ancora onnipresente, e in un browser che non lo supporta il

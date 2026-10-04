@@ -24,14 +24,29 @@ export const clearScrollHint = (): void => {
   starter = null;
 };
 
+/** true se l'hint ha gia' pubblicato il suo starter e puo' essere avviato. */
+export const isScrollHintReady = (): boolean => starter !== null;
+
 /**
- * Avvia lo scramble dell'hint.
+ * Avvia lo scramble dell'hint. Restituisce false se l'hint non e' ancora pronto.
  *
- * Non fa niente se l'hint non e' ancora pronto: e' un no-op silenzioso perche'
- * l'ordine dei due e' un dettaglio di montaggio, non un errore da segnalare.
- * Con `?skip` e con movimento ridotto e' l'unico modo in cui l'hint compare,
- * perche' in entrambi i casi la sequenza non arriva a chiamarlo dal suo elenco.
+ * Il ritorno serve perche' questo e' un no-op SILENZIOSO quando il ponte non e'
+ * stato costruito: e' gia' un difetto noto, e prima accettarlo in silenzio ha
+ * reso invisibile un blocco pagina intero.
+ *
+ * Il caso reale, misurato in `vite preview` su 1512x780, 1280x720 e 390x844:
+ * dopo 10 secondi la pagina era ancora `lenis lenis-stopped` con
+ * `overflow: hidden`, l'hint era `0x0 visibility: hidden`, e lo scroll non
+ * rispondeva a nessun gesto. La sequenza agganciava lo SBLOCCO a questo
+ * richiamo (vedi `EntrySequence`), che in quel ramo e' l'unico: un no-op vuoto
+ * lasciava la pagina congelata per sempre, con la Works che non si apriva e le
+ * card che non comparivano piu'.
+ *
+ * Chi ascolta puo' cosi' distinguere "l'hint e' partito" da "l'hint non esiste
+ * ancora", e sbloccare comunque: e' un'animazione, non un prerequisito.
  */
-export const startScrollHint = (): void => {
-  starter?.();
+export const startScrollHint = (): boolean => {
+  if (!starter) return false;
+  starter();
+  return true;
 };

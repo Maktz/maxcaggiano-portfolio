@@ -311,6 +311,53 @@
     border: 1px solid rgb(var(--color-pink) / 0.2);
   }
 
+  /* ── IL BORDO CHE SI ACCENDE: DUE SEZIONI, UN SEGNO SOLO ──────────────────
+     Quattro card del metodo e sette della Works, e in entrambe le sezioni una
+     sola cosa accade: quando qualcosa ARRIVA, la sua card cambia stato.
+
+     Nel metodo è il razzo che raggiunge la stazione; nella Works è la card che
+     finisce il ventaglio e atterra al suo slot. Due eventi diversi, lo stesso
+     gesto — e per questo la regola sta qui, una sola volta, invece di essere
+     riscritta in due posti dove i due pezzi di CSS si allontanerebbero al primo
+     ritocco.
+
+     Il colore è giallo e non una tinta della Works: il giallo qui significa
+     «arrivata», in tutto il sito, e cambiarne il significato persezione
+     romperebbe la regola che lo rende leggibile.
+
+     L'accensione è TOTALE e non un progressivo — bordo giallo pieno più un
+     bagliore — perché la card attraversata deve restare accesa e non tornare
+     mai al riposo.
+
+     Il transitorio è in CSS e non nel loop di scroll per la stessa ragione
+     della card «+»: la classe viene messa una volta sola (a ogni tappa), e
+     l'animazione la fa il browser. Un `transition` scritto a ogni frame
+     sarebbe lavoro buttato, e `prefers-reduced-motion` ha già un posto dove
+     spegnere i gesti.
+
+     `box-shadow` e non `filter: brightness`: su un prugna come #640E46 il
+     brightness satura le tre componenti e la card diventa bianca, perdendo
+     il colore di fondo che la distingue dal testo. */
+  .method-card,
+  .works-card {
+    transition:
+      border-color 0.4s ease,
+      box-shadow 0.4s ease;
+  }
+
+  .method-card.is-lit,
+  .works-card.is-lit {
+    border-color: rgb(var(--color-accent) / 0.85);
+    box-shadow: 0 0 30px -8px rgb(var(--color-accent) / 0.55);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .method-card,
+    .works-card {
+      transition: none;
+    }
+  }
+
   /* L'ALTEZZA COMUNE delle card.
      `--works-card-h` non è dichiarata qui con un valore: la scrive
      `ProjectsScene` dopo aver misurato la card vera più alta, perché l'altezza
@@ -487,5 +534,155 @@
   .scroll-hint-pulse {
     animation: scroll-hint-pulse 1.2s ease-in-out infinite alternate;
     will-change: opacity, transform;
+  }
+
+  /* ---------------------------------------------------------------------
+     IL CURSORE NATIVO.
+
+     Va in `components` e non in `base`, e il motivo e' controintuitivo: in
+     Tailwind `base` sta SOTTO `utilities`, quindi una regola li dentro
+     perderebbe contro il `cursor-pointer` che la pagina si porta gia' dietro —
+     il `KineticText` del ritratto, i titoli delle card, il bottone del
+     preloader. E non si puo' rimediare con la specificita': `html *` e
+     `.works-card-title` sono allo stesso livello, e vince chi viene dopo.
+
+     Il salvataggio e' `!important`, che e' l'unica leva che agisce contro i
+     layer senza dover elencare le eccezioni. E il prezzo e' noto e voluto:
+     finche' l'attributo c'e' non si puo' dichiarare nessun `cursor` nella
+     pagina — il che e' corretto, perche' in quel momento il cursore vero e'
+     il reticolo, e un cursore vero sopra il reticolo sarebbe un difetto.
+
+     Il selettore include `*` e non solo `html`: senza, un link mostrerebbe la
+     manina del browser sopra il reticolo e la pagina avrebbe due cursori
+     contemporaneamente.
+
+     L'attributo c'e' SOLO mentre il reticolo e' vivo (vedi ReticleCursor):
+     quando il mouse esce dalla finestra, quando la tab perde il focus o quando
+     il dispositivo non ha un puntatore fine, l'attributo sparisce e questa
+     regola sparisce con lui. E' la condizione che tiene la pagina usabile: un
+     cursore nascosto senza un reticolo che lo sostituisca e' il peggior difetto
+     che un cursore custom possa avere.
+     --------------------------------------------------------------------- */
+  html[data-reticle='on'],
+  html[data-reticle='on'] * {
+    cursor: none !important;
+  }
+
+  /* ---------------------------------------------------------------------
+     IL RETICOLO.
+     Tutto qui dentro sta sotto lo stesso `data-reticle` che mette via
+     JavaScript, e non sotto una classe: l'attributo e' la prova che il
+     reticolo e' VIVO (c'e' il mouse dentro la finestra e c'e' un puntatore
+     fine), e le regole devono valere solo in quel caso. Senza il vincolo,
+     l'`opacity: 0` del contenitore — che si mette quando la tab perde il
+     focus — lascerebbe il cursore nativo nascosto e la pagina inutilizzabile
+     col mouse: il difetto piu' grave che un reticolo possa avere.
+
+     Il colore e' il giallo dei titoli, che sul magenta ha un contrasto di 4.27
+     ed e' l'unico dei sette token che si stacca sia dal fondo sia dai titoli
+     gialli grandi. Il contorno prugna (`--color-deep`) sotto il pennello serve
+     al caso opposto: sopra un titolo giallo, il giallo su giallo sparisce, e
+     il contorno dice dove finisce il reticolo. Non e' un'ombra morbida ma un
+     bordo: un'ombra su un pixel non si vede, e il reticolo e' un pixel.
+     --------------------------------------------------------------------- */
+  [data-reticle-dot] {
+    /* Il punto e' un quadrato, non un cerchio: e' un reticolo, e il quadrato
+       allineato agli assi e' la forma che dice "puntatore" in un'interfaccia
+       tecnica. Il bordo prugna e' il contorno di cui sopra. */
+    border-radius: 1px;
+    background: rgb(var(--color-accent));
+    box-shadow: 0 0 0 1px rgb(var(--color-deep));
+    /* Il punto NON ha `will-change` proprio: e' l'unico elemento che segue il
+       mouse per intero, quindi cambia transform a ogni frame e la promotion
+       e' automatica dal momento in cui il reticolo esiste. */
+  }
+
+  [data-reticle-frame] {
+    /* La cornice non ha bordi propri: i bordi sono sulle due parentesi, che
+       sono i suoi figli. Dargli un bordo qui e metterlo anche li disegnerebbe
+       due cornici. */
+    will-change: width, height, transform;
+  }
+
+  .reticle-bracket {
+    position: absolute;
+    top: 0;
+    /* La parentesi occupa tutta l'altezza della cornice e 10px in larghezza.
+       Le due dimensioni crescono con la cornice, quindi incorniciare una card
+       alta 400px non richiede un nodo piu' grande: si allunga la stessa
+       parentesi. */
+    width: 10px;
+    height: 100%;
+    border: 1px solid rgb(var(--color-accent));
+    /* Il contorno prugna e' DENTRO il bordo, non fuori: un `box-shadow` senza
+       offset coprirebbe il giallo, e con offset allargherebbe la cornice di un
+       pixel costante che su un elemento di 36px si vede. `inset` all'interno
+       tiene il ingombro identico a quello dichiarato. */
+    box-shadow: inset 0 0 0 1px rgb(var(--color-deep));
+  }
+
+  .reticle-bracket--left {
+    left: 0;
+    border-right: none;
+  }
+
+  .reticle-bracket--right {
+    right: 0;
+    border-left: none;
+  }
+
+  .reticle-label {
+    /* La label e' `whitespace-nowrap` perche' su una card stretta `[ESPLORA]`
+       andrebbe a capo e la cornice sembrerebbe incorniciare due righe. */
+    white-space: nowrap;
+    font-family: 'Space Mono', monospace;
+    /* 10px e non 11: sotto i 12px il mono di questa pagina non ha piu' aria
+       fra le lettere, e `[VAI]` diventerebbe tre graffi illeggibili. Il
+      Projects della Works usa 10px per la stessa ragione. */
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    color: rgb(var(--color-accent));
+    /* Lo stesso contorno prugna, e per lo stesso motivo. Sul testo e'
+       necessario anche perche' il testo ha uno spessore minore del bordo:
+       basta mezzo pixel di slittamento e sul giallo dei titoli sparisce. */
+    text-shadow:
+      1px 0 0 rgb(var(--color-deep)),
+      -1px 0 0 rgb(var(--color-deep)),
+      0 1px 0 rgb(var(--color-deep)),
+      0 -1px 0 rgb(var(--color-deep));
+  }
+
+  .reticle-bar {
+    /* La barra del terminale. 2px di larghezza: e' un cursore di testo, e un
+       cursore di testo e' sottile per definizione. */
+    width: 2px;
+    /* L'altezza la scrive il loop: a zero e' spenta, e questo e' il suo
+       spegnimento — il CSS non deve conoscere lo stato del reticolo. */
+    height: 0;
+    background: rgb(var(--color-accent));
+    box-shadow: 0 0 0 1px rgb(var(--color-deep));
+    /* La pulsazione e' a `steps` e non con una curva: il lampeggio di un
+       terminale e' acceso TUTTO e spento TUTTO, e una curva morbida fra i due
+       stati sembrerebbe una dissolvenza. `steps(1)` rende il salto istantaneo,
+       che e' l'unico modo in cui un lampeggio si legge come un lampeggio. */
+    animation: reticle-blink 1.05s steps(1, end) infinite;
+  }
+
+  @keyframes reticle-blink {
+    0%, 49% { opacity: 1; }
+    50%, 100% { opacity: 0.12; }
+  }
+
+  /* Il lampeggio si ferma sotto `prefers-reduced-motion`. Non perche' il
+     lampeggio sia un movimento — non lo e', e l'utente che ha chiesto meno
+     animazione accetterebbe un cursore che lampeggia — ma perche' con
+     `prefers-reduced-motion` la specifica chiede che il reticolo si limiti a
+     spostamento diretto, e una flickering perpetuo e' il primo sintomo che
+     l'occhio coglie di un'animazione continua. */
+  @media (prefers-reduced-motion: reduce) {
+    .reticle-bar {
+      animation: none;
+      opacity: 1;
+    }
   }
 }

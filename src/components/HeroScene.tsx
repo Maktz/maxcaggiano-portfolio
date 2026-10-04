@@ -47,6 +47,13 @@ import {
   pathCenter,
   pathNumbers,
 } from '@/lib/faceRig';
+import {
+  activeReactionKind,
+  sampleReaction,
+  staticOverlayFrame,
+  subscribeAvatarReaction,
+} from '@/lib/avatarReactions';
+import { createReactionOverlay, type ReactionOverlay } from '@/lib/avatarReactionOverlay';
 
 // Il ritratto e' mostrato come IMMAGINE, non come maschera: l'SVG porta colori
 // propri e vengono rispettati. Usando il canale alfa come maschera su un div
@@ -65,6 +72,24 @@ const SVG_FIT_CLASSES = '[&>svg]:block [&>svg]:h-full [&>svg]:w-full';
 // Ritmo della bocca. Non e' un'onda continua: il viso posa su ciascuno dei due
 // stati e poi scorre verso l'altro. Le quattro fasi e i loro tempi stanno in
 // mouthLoopK, in faceRig: l'apertura occupa meno tempo della chiusura.
+// L'IDLE DELLO SGUARDO, come funzione e non come valore.
+//
+// Sono due oscillazioni con periodi coprimi, ognuna con permanenza agli
+// estremi: non e' una somma di sinusoidi a velocita' costante, perche' l'occhio
+// deve POSARE lo sguardo e solo dopo spostarsi sul successivo.
+//
+// Sono funzioni e non costanti perche' una reazione deve poter SOSPENDERE
+// l'idle: se il valore fosse calcolato qui dentro e messo in una variabile, non
+// ci sarebbe modo di dire al rig "per ora non chiedermelo". Con una funzione,
+// il rig la chiama solo quando l'idle e' libero, e la sospensione e' il fatto
+// di non chiamarla — che e' la forma piu' economica di una pausa: nessun flag,
+// nessuno stato, e alla fine della reazione l'idle riprende esattamente da
+// dove si trovava, senza che nessuno abbia dovuto ricordare il suo valore.
+const idleLookX = (t: number): number =>
+  easedWave(t, LOOK_PERIOD_A, LOOK_STAY) * 0.62 + easedWave(t, LOOK_PERIOD_B, LOOK_STAY) * 0.3;
+const idleLookY = (t: number): number =>
+  easedWave(t, LOOK_PERIOD_B * 0.61, LOOK_STAY) * 0.34;
+
 const MOUTH_CYCLE_SECONDS = 8.4; // un giro completo: sorriso -> chiuso -> sorriso
 
 // Sguardo e sopracciglia: due oscillazioni con periodi coprimi, cosi' non
@@ -1068,7 +1093,49 @@ export default function HeroScene({ scrollY }: { scrollY: MotionValue<number> })
     const hosts = faceHostsRef.current.filter(Boolean);
     if (!hosts.length) return;
 
-    if (reducedMotion) return;
+    // ── IL RAMO SENZA MOVIMENTO ──────────────────────────────────────────────
+    //
+    // Qui sotto, con `prefers-reduced-motion`, il viso e' giusto un disegno e
+    // basta: niente ciclo della bocca, niente sguardo vagante, niente blink.
+    // Ma le REAZIONI non sono un movimento che si puo' togliere insieme agli
+    // altri — sono uno STATO: stelle e cuori al posto degli occhi devono
+    // comparire anche qui, o l'avatar risponderebbe a un invio del form restando
+    // fermo, che e' il caso peggiore: il segnale arriva, l'utente aspetta una
+    // risposta e non c'e'.
+    //
+    // Quindi qui non si gira il rig. Si fa la cosa minima: si mettono su stelle
+    // o cuori quando l'evento arriva e si tolgono quando finisce. Niente molla,
+    // niente pulsazione, niente inclinazione, niente cuoricini — e i gruppi si
+    // accendono e spengono di colpo, che e' l'unico scambio che resti leggibile
+    // senza animazione.
+    if (reducedMotion) {
+      const overlays = hosts
+        .map((host) => createReactionOverlay(host))
+        .filter((o): o is ReactionOverlay => o !== null);
+      if (!overlays.length) return;
+      // Un solo ascoltatore per TUTTI gli overlay, non uno per host: la reazione
+      // e' una sola, e replicare l'iscrizione per ogni istanza significherebbe
+      // che l'evento arriva tre volte con lo stesso identico disegno.
+      let on = false;
+      const off = subscribeAvatarReaction((kind) => {
+        on = true;
+        overlays.forEach((overlay) => overlay.apply(staticOverlayFrame(kind)));
+      });
+      // Il timer: qui non c'e' un rAF che possa accorgersi che la reazione e'
+      // finita, quindi la fine la deve dire il clock. `endsAt` viene riletto da
+      // `activeReactionKind`, che e' l'unico che sa quando il tempo e' scaduto.
+      const end = window.setInterval(() => {
+        if (on && activeReactionKind() === null) {
+          on = false;
+          overlays.forEach((overlay) => overlay.reset());
+        }
+      }, 120);
+      return () => {
+        window.clearInterval(end);
+        off();
+        overlays.forEach((overlay) => overlay.destroy());
+      };
+    }
 
     // Sprite delle particelle puntiformi, disegnati una volta sola: alone
     // radiale stretto con il nucleo piu' luminoso. Disegnarli ogni frame
@@ -1202,6 +1269,14 @@ export default function HeroScene({ scrollY }: { scrollY: MotionValue<number> })
       const lowerLipClosedY = maxY(lowerLip.closed);
       const lowerLipTravel = lowerLipRestY - lowerLipClosedY;
       const brows = BROW_PATH_INDEXES.map((i) => paths[i] as SVGPathElement);
+      // L'OVERLAY delle reazioni nasce QUI, dentro il `map` e quindi una volta
+      // per istanza. Due motivi, entrambi gia' visti con l'idle: primo, le due
+      // istanze dell'SVG sono due nodi distinti e ciascuna ha bisogno dei suoi
+      // gruppi; secondo, se l'overlay fosse creato una volta e condiviso, le
+      // stelle comparirebbero sull'istanza sbagliata — cioe' sul layout mobile
+      // mentre si guarda il desktop, che e' un difetto invisibile in una
+      // viewport sola e lampante passando da una all'altra.
+      const overlay = createReactionOverlay(host);
       return {
         host,
         mouth,
@@ -1212,7 +1287,15 @@ export default function HeroScene({ scrollY }: { scrollY: MotionValue<number> })
         lowerLipRestY,
         lowerLipTravel,
         brows,
+        overlay,
         onScreen: false,
+        // `reacting` e' la memoria dell'ultimo frame per questa faccia, e serve
+        // a una cosa sola: sapere se il `reset` e' gia' stato fatto. Senza, il
+        // reset verrebbe chiamato a ogni frame in cui non c'e' reazione — cioe'
+        // quasi sempre — e scriverebbe un `display: none` e un transform vuoto
+        // sull'host a ogni passaggio. Il flag costa un confronto e risparmia
+        // migliaia di scritture.
+        reacting: false,
         // Le sentinelle sono PER FACCIA, non del ciclo. Erano dichiarate una
         // volta sola fuori dal `for (const face of faces)`, quindi condivise fra
         // le due istanze: la seconda non veniva mai aggiornata, perche' la
@@ -1229,6 +1312,10 @@ export default function HeroScene({ scrollY }: { scrollY: MotionValue<number> })
           lookY: Number.POSITIVE_INFINITY,
           brow: Number.POSITIVE_INFINITY,
           open: Number.POSITIVE_INFINITY,
+          // Il fattore degli occhi della reazione, confrontato come gli altri.
+          // Vedi il ramo che lo disegna: senza questa sentinella l'occhio non
+          // verrebbe riscritto quando la reazione finisce.
+          eye: Number.POSITIVE_INFINITY,
           pierce: Number.POSITIVE_INFINITY,
         },
       };
@@ -1359,6 +1446,30 @@ export default function HeroScene({ scrollY }: { scrollY: MotionValue<number> })
         k = frame.k;
         inLoop = frame.inLoop;
 
+        // ── LE REAZIONI ──────────────────────────────────────────────────────
+        //
+        // Sono l'innesto PIU' ALTO di tutti, sopra il controller e sopra il
+        // ciclo autonomo, e la gerarchia e' quella della specifica: cuori >
+        // stelline > sorpresa d'ingresso > idle. Il `sample` restituisce `null`
+        // quando non c'e' reazione, e da li' in giu' il codice e' esattamente
+        // quello di prima: per questo qui si SCRIVONO i numeri e non si
+        // disegna niente.
+        //
+        // `baseK` e' il valore di bocca che il rig aveva appena calcolato, e
+        // serve perche' la reazione ci torni dentro invece di schiacciarlo: se
+        // il ciclo della bocca ricevesse direttamente 1, alla fine della
+        // reazione ripartirebbe dal suo valore e il viso aprirebbe e chiuderebbe
+        // la bocca di scatto.
+        const reaction = sampleReaction(t, k);
+        if (reaction) {
+          k = reaction.mouth;
+          // `inLoop` va spento per forza: con il loop acceso, il ramo qui
+          // sotto prenderebbe la bocca da `lerpPath` con il percorso del ciclo,
+          // che al valore 1 non e' il sorriso pieno ma il punto del ciclo in
+          // cui siamo — e i denti non uscirebbero.
+          inLoop = false;
+        }
+
         if (Math.abs(k - face.sent.mouth) > 0.002 || Math.abs(Number(inLoop) - face.sent.loop) > 0) {
           face.sent.mouth = k;
           face.sent.loop = Number(inLoop);
@@ -1388,42 +1499,70 @@ export default function HeroScene({ scrollY }: { scrollY: MotionValue<number> })
         // aprire anche la bocca, che qui devono poter andare separati.
         const openness = frame.openness ?? EYE_CLOSED_SCALE + (1 - EYE_CLOSED_SCALE) * k;
 
-        // Sguardo: due oscillazioni con periodi coprimi, ognuna con permanenza
-        // agli estremi. Non e' piu' una somma di sinusoidi a velocita' costante:
-        // l'occhio posa lo sguardo e solo dopo si sposta sul successivo.
+        // LA REAZIONE COMANDA L'OCCHIO, E SOLO LEI.
         //
-        // Il controller ha la precedenza: se e' lui a comandare (sequenza, o
-        // sguardo su un bersaglio) i suoi valori vincono, e questa oscillazione
-        // resta la sorgente solo quando l'idle e' libero.
-        const lookX =
-          frame.lookX ??
-          easedWave(t, LOOK_PERIOD_A, LOOK_STAY) * 0.62 +
-            easedWave(t, LOOK_PERIOD_B, LOOK_STAY) * 0.3;
-        const lookY =
-          frame.lookY ?? easedWave(t, LOOK_PERIOD_B * 0.61, LOOK_STAY) * 0.34;
+        // Il valore qui e' quello che il rig ha dedotto dalla bocca, cioe' il
+        // ciclo autonomo: durante una reazione non e' piu' l'occhio che guarda,
+        // e' l'occhio che regge una stella. Per questo il fattore non sostituisce
+        // `openness` ma lo MOLTIPLICA: cosi' la reazione non deve sapere se il
+        // viso e' a occhi spalancati o socchiusi in quel momento, e puo' fare il
+        // suo shrink da qualunque punto senza toccare la bocca.
+        //
+        // 0.18 e non 0: a zero la pupilla sparisce dentro la sclera e la chiusura
+        // si legge come un difetto. A 0.18 l'iride e' ancora un punto scuro che
+        // fa da ombra sotto la stella, ed e' quello che rende lo scambio convincente
+        // invece che un elemento comparso sopra un occhio sparito.
+        const eyeFactor = reaction ? reaction.eyeScale : 1;
+        // Lo sguardo si azzera durante la reazione. Non e' una scelta estetica:
+        // gli occhi sono ridotti al 18% e le pupille che si muovono dentro un
+        // cerchio cosi' piccolo sembrerebbero vibrare, e un occhio che vibra
+        // sembra un occhio che non funziona. E' la sospensione dell'idle richiesta
+        // dalla specifica, applicata al solo canale che la reazione occupa.
+        const lookX = reaction ? 0 : (frame.lookX ?? idleLookX(t));
+        const lookY = reaction ? 0 : (frame.lookY ?? idleLookY(t));
+
+        // L'onda dell'idle e' la sorgente dello sguardo solo quando l'idle e'
+        // libero: durante una reazione i due valori qui sopra sono gia' 0, e
+        // questa funzione non viene nemmeno valutata. Il ternario e' quello che
+        // sospende l'idle per davvero — non serve un flag, basta che nessuno
+        // chieda il numero.
         if (
           Math.abs(lookX - face.sent.lookX) > 0.01 ||
           Math.abs(lookY - face.sent.lookY) > 0.01 ||
-          Math.abs(openness - face.sent.open) > 0.002
+          Math.abs(openness - face.sent.open) > 0.002 ||
+          // Il fattore della reazione va nella sentinella ALTRIMENTI l'occhio
+          // resta ridotto per sempre. Il ramo entra solo se `openness` e'
+          // cambiata, e durante una reazione `openness` non cambia: torna
+          // esattamente al valore di prima appena la reazione finisce, quindi il
+          // confronto con la sentinella dice "uguale" e quei path non vengono
+          // riscritti. L'ultimo valore scritto e' quello con la stella dentro,
+          // e l'occhio restava chiuso. La sentinella deve ricordare ANCHE il
+          // fattore, perche' e' una parte del valore disegnato.
+          Math.abs(eyeFactor - face.sent.eye) > 0.002
         ) {
           face.sent.lookX = lookX;
           face.sent.lookY = lookY;
           face.sent.open = openness;
+          face.sent.eye = eyeFactor;
           face.eyes.forEach((eye, i) => {
             const dx = lookX * 2.6 * (i === 0 ? 1 : -1);
             const dy = lookY * 1.8;
+            // Il fattore finale e' `openness` scalato dalla reazione: lo stesso
+            // numero per il bianco e per le parti interne, altrimenti l'iride
+            // uscirebbe dalla sclera mentre la stella sta entrando.
+            const open = openness * eyeFactor;
             // Il bianco si stringe solo in verticale: sopra e sotto.
             const w = eye.white;
             w.el.setAttribute(
               'transform',
-              `translate(${dx.toFixed(2)} ${dy.toFixed(2)}) translate(0 ${w.cy.toFixed(2)}) scale(1 ${openness.toFixed(3)}) translate(0 ${(-w.cy).toFixed(2)})`,
+              `translate(${dx.toFixed(2)} ${dy.toFixed(2)}) translate(0 ${w.cy.toFixed(2)}) scale(1 ${open.toFixed(3)}) translate(0 ${(-w.cy).toFixed(2)})`,
             );
             // Iride, pupilla e riflesso si rimpiccioliscono in modo uniforme,
             // quindi restano cerchi, ciascuno attorno al proprio centro.
             for (const part of eye.parts) {
               part.el.setAttribute(
                 'transform',
-                `translate(${dx.toFixed(2)} ${dy.toFixed(2)}) translate(${part.cx.toFixed(2)} ${part.cy.toFixed(2)}) scale(${openness.toFixed(3)}) translate(${(-part.cx).toFixed(2)} ${(-part.cy).toFixed(2)})`,
+                `translate(${dx.toFixed(2)} ${dy.toFixed(2)}) translate(${part.cx.toFixed(2)} ${part.cy.toFixed(2)}) scale(${open.toFixed(3)}) translate(${(-part.cx).toFixed(2)} ${(-part.cy).toFixed(2)})`,
               );
             }
           });
@@ -1436,10 +1575,14 @@ export default function HeroScene({ scrollY }: { scrollY: MotionValue<number> })
         // Sospeso l'idle, l'alzata viene dalla posa e non dalla bocca: e'
         // l'unico modo per avere la sorpresa (sopracciglia in su, bocca
         // socchiusa) senza che le due cose siano legate a un unico numero.
-        const browWave =
-          easedWave(t, BROW_PERIOD_A, BROW_STAY) * 0.6 +
-          easedWave(t, BROW_PERIOD_B, BROW_STAY) * 0.4;
-        const brow = frame.brow ?? browWave + BROW_RAISE * k;
+        // Lo stesso vale per la reazione, che alza le sopracciglia di poco:
+        // la specifica chiede "leggermente alzate" e non "in su", quindi il
+        // valore e' sotto `BROW_RAISE` e non deve raggiungerlo mai.
+        const browWave = reaction
+          ? 0
+          : easedWave(t, BROW_PERIOD_A, BROW_STAY) * 0.6 +
+            easedWave(t, BROW_PERIOD_B, BROW_STAY) * 0.4;
+        const brow = reaction ? reaction.brow : (frame.brow ?? browWave + BROW_RAISE * k);
         if (Math.abs(brow - face.sent.brow) > 0.005) {
           face.sent.brow = brow;
           face.brows.forEach((el, i) => {
@@ -1461,6 +1604,24 @@ export default function HeroScene({ scrollY }: { scrollY: MotionValue<number> })
               `translate(0 ${pierce.toFixed(2)}) translate(${gem.cx.toFixed(2)} ${gem.cy.toFixed(2)}) scale(1 ${stretch.toFixed(4)}) translate(${(-gem.cx).toFixed(2)} ${(-gem.cy).toFixed(2)})`,
             );
           }
+        }
+
+        // L'OVERLAY. Va per ultimo, dentro il `for (const face of faces)` e
+        // quindi una volta per ogni istanza realmente in scena: e' l'unica
+        // riga che tocca il secondo SVG, e sta qui perche' a questo punto tutti
+        // i numeri della reazione sono gia' passati negli occhi, nella bocca e
+        // nelle sopracciglia — l'overlay e' la parte che si vede, ma non e'
+        // quella che decide.
+        //
+        // Il `reset` quando non c'e' reazione e' l'equivalente di un `finally`:
+        // senza, alla fine di una reazione le stelle resterebbero accese e la
+        // testa inclinata per sempre, perche' nessuno le spegne piu'.
+        if (reaction) {
+          face.overlay?.apply(reaction);
+          face.reacting = true;
+        } else if (face.reacting) {
+          face.overlay?.reset();
+          face.reacting = false;
         }
       }
 
@@ -1516,6 +1677,12 @@ export default function HeroScene({ scrollY }: { scrollY: MotionValue<number> })
     return () => {
       running = false;
       window.cancelAnimationFrame(frame);
+      // L'overlay va via con l'effetto che l'ha creato. Senza questo, un
+      // rimontaggio dell'SVG — che qui accade ogni volta che il markup arriva,
+      // e in sviluppo a ogni salvataggio — lascerebbe il vecchio overlay attaccato
+      // a un host sparito, e il nuovo host ne avrebbe uno suo: due overlay, e
+      // quello vecchio mostrerebbe stelle sopra un nodo che non esiste piu'.
+      faces.forEach((face) => face.overlay?.destroy());
     };
   }, [svgMarkup]);
 

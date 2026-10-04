@@ -12,12 +12,24 @@ interface HeaderProps {
   activeSection: number;
 }
 
+// I titoli del banner, uno per sezione, nell'ordine in cui le sezioni si
+// incontrano scorrendo. L'indice arriva da `stageIndexAt` (App.tsx), quindi
+// l'elenco e quell'ordine NON possono essere due fatti separati: se una
+// sezione fosse inserita fra due altre e l'elenco restasse com'era, il titolo
+// mostrerebbe il nome della sezione sbagliata per tutta la visita — un errore
+// invisibile nel codice e lampante a schermo.
+//
+// I primi tre sono il marchio: la fascia attraversa preloader, hero e nebulosa
+// prima che ci sia un nome di sezione da mostrare, e il titolo del brand è
+// l'unica cosa che ha senso in quelle tre.
 const TITLES = [
   BRAND_TITLE_TEXT,
   BRAND_TITLE_TEXT,
   BRAND_TITLE_TEXT,
+  'CHI SONO',
   'LAVORI SELEZIONATI',
-  'TRASMISSIONE',
+  'IL MIO METODO',
+  'COSTRUIAMO.',
 ];
 
 export default function Header({ activeSection }: HeaderProps) {

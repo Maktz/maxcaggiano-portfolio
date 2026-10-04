@@ -1,6 +1,7 @@
 import { useId, useState } from 'react';
 import { motion } from 'framer-motion';
 import TransmissionButton from './TransmissionButton';
+import { reactAvatar } from '@/lib/avatarReactions';
 
 // IL FORM DI CONTATTO, UNICO PER TUTTA LA PAGINA.
 //
@@ -38,6 +39,12 @@ export default function ContactForm({ source }: ContactFormProps) {
   const emailId = useId();
   const briefId = useId();
 
+  // I CUORI. Un trigger solo, qui dentro, e copre le DUE istanze del form — la
+  // sezione "Costruiamo" e quella dentro il modal — perche' il form e' uno solo
+  // e la validazione e' una sola. Metterlo anche in `AddProjectModal` avrebbe
+  // duplicato la riga e lasciato il caso di un invio dal form della sezione
+  // senza reazione: e' esattamente il difetto che evita `motionPreference`,
+  // una domanda con due risposte in due posti.
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.name || !form.email || !form.brief) {
@@ -45,6 +52,10 @@ export default function ContactForm({ source }: ContactFormProps) {
       return;
     }
     setError('');
+    // Dopo il `setError` e non prima: la reazione deve partire dall'INVIO
+    // valido, e con i campi vuoti il viso si complimenterebbe per un messaggio
+    // che non e' stato spedito. Il ramo di sopra e' quello che restituisce.
+    reactAvatar('hearts');
     setSubmitted(true);
   };
 
@@ -130,8 +141,13 @@ export default function ContactForm({ source }: ContactFormProps) {
       <div className="flex justify-end">
         {/* Stesso componente del pulsante del preloader: la classe, l'hover,
             la freccia e la scala al click sono le stesse, e il CSS del
-            pulsante non esiste in due posti. */}
-        <TransmissionButton type="submit" label="INVIA TRASMISSIONE" />
+            pulsante non esiste in due posti.
+
+            `reaction={null}` perche' l'unica reazione giusta qui e' quella dei
+            CUORI, e parte dall'invio andato a buon fine (vedi `handleSubmit`),
+            non dal click su INVIA. Senza questo, un invio con i campi vuoti
+            farebbe reagire il viso a un invio che non e' avvenuto. */}
+        <TransmissionButton type="submit" label="INVIA TRASMISSIONE" reaction={null} />
       </div>
     </form>
   );

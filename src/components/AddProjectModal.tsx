@@ -218,11 +218,25 @@ export default function AddProjectModal({ onClose, origin }: AddProjectModalProp
           essere cliccabile per chiudere, ma NON deve rubare i click a ciò che c'è
           dentro il pannello. Con lo sfondo sul contenitore, chiuderebbe anche
           premendo sul form. Il click fuori è l'unica via di chiusura col
-          mouse; ESC e il bottone sono le altre due. */}
+          mouse; ESC e il bottone sono le altre due.
+
+          `top-24` e non `inset-0`: il backdrop non parte dalla fascia in alto, ma
+          da SOTTO l'header. Non è una questione estetica. Il `backdrop-blur`
+          sfoca tutto ciò che sta sotto di lui, e sotto lui ci sono l'header
+          (z-50) e il marchio con l'avatar (LogoLayer, z-60): il dialog è aperto
+          proprio mentre parte una reazione, quindi l'animazione dell'avatar
+          accadeva dietro una sfocatura e non si vedeva. Con il bordo superiore
+          a 96px — l'altezza `h-24` dell'header — fascia e ritratto restano
+          netti, e la reazione si vede.
+
+          Non si perde nulla sul click fuori: il contenitore `z-[70]` copre tutta
+          la viewport e ha gia' `onClick={requestClose}`, quindi premere
+          sull'header chiude esattamente come prima. Qui sotto il pannello
+          cliccabile e' ridotto, ma il pannello stesso ferma la propagazione. */}
       <div
         onClick={requestClose}
         aria-hidden="true"
-        className="absolute inset-0 bg-canvas/60 backdrop-blur-sm transition-opacity"
+        className="absolute inset-x-0 bottom-0 top-24 bg-canvas/60 backdrop-blur-sm transition-opacity"
         style={{ opacity: closing ? 0 : 1, transitionDuration: `${FLIP_DURATION}s` }}
       />
 

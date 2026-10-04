@@ -363,6 +363,19 @@ export default function ProjectsScene({
       // prima di misurare, altrimenti la corsa risulterebbe gia' consumata.
       if (scene && strip) {
         strip.style.transform = '';
+        // Anche i transform delle CARD vanno tolti prima di misurare: azzerare
+        // quello dello STRIP toglie solo la traslazione della corsa, non la
+        // `rotate(...) scale(0.25)` scritta su ciascuna card. I rect letti
+        // subito dopo erano quindi larghi un quarto e ruotati, e `travel` — da
+        // cui derivano `raceSpan` e l'altezza della sezione — ne usciva falsato:
+        // l'altezza oscillava fra 4714px e 2251px e la sezione successiva
+        // saltava su e giù di 2463px. L'opacità torna a 1 perché l'ingresso
+        // spegne le card; il render loop le rimette a posto al frame dopo.
+        cardRefs.current.forEach((card) => {
+          if (!card) return;
+          card.style.transform = '';
+          card.style.opacity = '1';
+        });
         const sceneRect = scene.getBoundingClientRect();
         const stripW = strip.scrollWidth;
         // Gli slot sono letti per PRIMI, in coordinate locali della SCENA
@@ -593,16 +606,10 @@ export default function ProjectsScene({
           };
         });
       }
-      cardRefs.current.forEach((card) => {
-        if (!card) return;
-        // Rimuoviamo temporaneamente la trasformazione corrente per leggere
-        // lo slot del layout, non la posizione animata precedente. L'opacità
-        // torna a 1 perché l'ingresso spegne la card: senza, il rect sarebbe
-        // quello di un elemento invisibile e la misura degli slot sarebbe
-        // quella di una Works non ancora formata.
-        card.style.transform = '';
-        card.style.opacity = '1';
-      });
+      // I transform delle card sono già stati azzerati PRIMA della misura (vedi
+      // il blocco dentro `if (scene && strip)`): qui non c'è più nulla da
+      // rimettere a posto. Il render loop li riscrive al frame successivo, quindi
+      // la Works torna nel ventaglio senza che la misura ne risenta.
       setLayoutVersion((version) => version + 1);
     };
 
@@ -964,6 +971,22 @@ export default function ProjectsScene({
         if (landedRef.current[index] !== complete) {
           landedRef.current[index] = complete;
           card.style.willChange = complete ? 'auto' : 'transform';
+          // LA CARD SI ACCENDE AL SUO ATTERRAGGIO, con lo stesso gesto delle
+          // stazioni del metodo: quando il razzo raggiunge una tappa quella si
+          // illumina di giallo, e qui lo fa la card che arriva al suo slot. Non
+          // è una decorazione: è lo stesso segno che in tutto il sito vuol dire
+          // «arrivata», e la card è arrivata esattamente adesso.
+          //
+          // La classe sta sul bottone dentro il wrapper, non sul wrapper stesso
+          // (il wrapper non ha bordo: il bordo è della card, che ha il suo
+          // contenuto dentro). Per questo la si mette con un `querySelector` e
+          // non scrivendo `card.classList`.
+          //
+          // Dentro il `if`, quindi una volta per card e non a ogni frame: il
+          // ref fa da guardia esattamente come per `willChange` poco sopra.
+          card
+            .querySelector('.works-card')
+            ?.classList.toggle('is-lit', complete);
         }
         // A `fanT = 1` traslazione e rotazione sono 0 e la scala è 1: la card è
         // esattamente nel suo slot, quindi si azzera lo stile e la trasformazione

@@ -1,5 +1,6 @@
 import { ArrowUpRight } from 'lucide-react';
 import { openAddProjectModal } from '@/lib/addProjectControl';
+import { reactAvatar } from '@/lib/avatarReactions';
 
 /**
  * L'ultima card della Works: uno SLOT VUOTO da riempire, non un progetto.
@@ -31,10 +32,23 @@ export default function AddProjectCard() {
       // il pannello comparirebbe al centro dello schermo e il legame fra la
       // card premuta e il dialog che si apre si perderebbe. `currentTarget` è la
       // card stessa, non il '+' dentro: è lei che si espande.
-      onClick={(event) => openAddProjectModal(event.currentTarget.getBoundingClientRect())}
+      onClick={(event) => {
+        // Le STELLINE partono dal click, non dall'apertura del modal: il viso
+        // reagisce a un'azione compiuta, e il click e' l'azione. Metterlo
+        // dentro `openAddProjectModal` sembrerebbe piu' pulito — un solo punto
+        // invece di due — ma allora reagirebbe anche quando il modal si apre
+        // dalla sezione metodo, dove la specifica non lo chiede, e il click su
+        // un'altra card che pure apre il form non avrebbe risposta.
+        reactAvatar('stars');
+        openAddProjectModal(event.currentTarget.getBoundingClientRect());
+      }}
       aria-haspopup="dialog"
       aria-label="Aggiungi il tuo progetto"
       data-add-project-card=""
+      // La label del cursore e' `[AGGIUNGI]` e non `[VAI]`: `VAI` su questa
+      // card sarebbe una promessa di una destinazione che qui non c'e' — qui si
+      // apre un form, e la parola giusta e' quella che ci mette dentro.
+      data-reticle-label="AGGIUNGI"
       className="add-project-card group relative flex h-full w-full flex-col gap-2.5 overflow-hidden bg-transparent p-4 text-left md:p-5"
     >
       {/* Intestazione: stesso marcapunto `[…]` e stesso mono 9px delle card

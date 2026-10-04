@@ -14,9 +14,12 @@ import HeroScene from '@/components/HeroScene';
 import ParticleNebulaCanvas from '@/components/ParticleNebulaCanvas';
 import NebulaScene from '@/components/NebulaScene';
 import ProjectsScene from '@/components/ProjectsScene';
+import AboutScene from '@/components/AboutScene';
+import MethodScene from '@/components/MethodScene';
 import ContactScene from '@/components/ContactScene';
 import ProjectModal from '@/components/ProjectModal';
 import AddProjectModal from '@/components/AddProjectModal';
+import ReticleCursor from '@/components/ReticleCursor';
 import { useMagnetStages } from '@/hooks/useMagnetStages';
 import { useSmoothScroll } from '@/providers/smoothScrollContext';
 import {
@@ -31,6 +34,8 @@ import { registerAddProjectModal, clearAddProjectModal } from '@/lib/addProjectC
 import { lockScroll } from '@/lib/scrollLock';
 import { useProjects } from '@/hooks/useProjects';
 import { COORD_MILANO, COORD_POTENZA, COORD_VIA_LATTEA } from '@/lib/entryCopy';
+import { COORD_BASE_OPERATIVA } from '@/data/mission';
+import { COORD_ROTTA } from '@/data/method';
 
 // Telemetria, valori in gradi.
 // VIA LATTEA = Sagittarius A*, il nucleo galattico. Coordinate prese da
@@ -45,6 +50,12 @@ const EARTH_RA = 0;
 const EARTH_DEC = 0;
 const GALAXY_LABEL = 'VIA LATTEA';
 const EARTH_LABEL = 'PIANETA TERRA';
+// L'etichetta di «Costruiamo». Mancava, e la sua assenza era un difetto visibile:
+// i confronti sotto vanno dal fondo alla testa e senza questo ramo la sezione
+// finale ereditava l'etichetta della sezione precedente («IL MIO METODO»),
+// dicendo «ROTTA - 4 TAPPE» mentre la pagina chiedeva gia' un progetto. Il
+// vocabolario e' quello del form, che chiama la sua azione una «TRASMISSIONE».
+const CONTACT_LABEL = 'TRASMISSIONE - APERTA';
 
 const lerp = (from: number, to: number, t: number) => from + (to - from) * t;
 
@@ -52,14 +63,23 @@ const lerp = (from: number, to: number, t: number) => from + (to - from) * t;
 // confronti vanno dal fondo alla testa. readSceneTop restituisce 0 per una
 // sezione assente e 0 vincerebbe il confronto, quindi la guardia serve:
 // senza, una sezione mancante collasserebbe la scena attiva sull'ultima.
+//
+// L'ordine dei confronti e' l'ordine delle sezioni nel DOM, e deve esserlo: e'
+// la stessa condizione che governa `TITLES` nell'Header, e i due elenchi
+// divergerebbero al primo inserimento. Ogni sezione nuova ha quindi esattamente
+// due posti in cui dichiararsi, e sono questi due.
 const stageIndexAt = (scrollY: number) => {
   const contact = readSceneTop('contact');
+  const method = readSceneTop('method');
   const works = readSceneTop('works');
+  const about = readSceneTop('about');
   const nebula = readSceneTop('nebula');
   const hero = readSceneTop('hero');
-  if (!contact || !works || !nebula || !hero) return 0;
-  if (scrollY >= contact - 1) return 4;
-  if (scrollY >= works - 1) return 3;
+  if (!contact || !method || !works || !about || !nebula || !hero) return 0;
+  if (scrollY >= contact - 1) return 6;
+  if (scrollY >= method - 1) return 5;
+  if (scrollY >= works - 1) return 4;
+  if (scrollY >= about - 1) return 3;
   if (scrollY >= nebula - 1) return 2;
   if (scrollY >= hero - 1) return 1;
   return 0;
@@ -234,12 +254,19 @@ export default function App() {
   // Telemetria: la posizione si scioglie dalla Via Lattea alla Terra mentre si
   // attraversa la nebulosa. Finestra ancorata agli stop reali (fine dello SVG ->
   // griglia completa): a nebulaTop l'SVG e' sparito e la sagoma e' centrata, a
-  // worksTop la griglia e' composta. Finche' l'SVG c'e', si mostra la Via Lattea.
+  // Telemetria: la posizione si scioglie dalla Via Lattea alla Terra mentre si
+  // attraversa la nebulosa, e poi ogni sezione dichiara la propria etichetta.
+  //
+  // La finestra di interpolazione termina ad `about` e non a `works`: «Chi
+  // Sono» è la prima sezione in cui la posizione non è più astronomica ma
+  // l'indirizzo di una persona, e farci finire lo zoom fa dire una cosa sola
+  // per volta. Works e Method hanno a loro volta etichette dedicate, quindi la
+  // Terra — il punto di arrivo dello zoom — resta alla Works, dove era già.
   const telemetryMix = useTransform(scrollY, (value) => {
     const nebula = document.querySelector<HTMLElement>('[data-scene="nebula"]');
-    const works = document.querySelector<HTMLElement>('[data-scene="works"]');
-    if (!nebula || !works) return 0;
-    return phase(value, nebula.offsetTop, works.offsetTop);
+    const about = document.querySelector<HTMLElement>('[data-scene="about"]');
+    if (!nebula || !about) return 0;
+    return phase(value, nebula.offsetTop, about.offsetTop);
   });
   // Telemetria: un solo elemento, nessun fade. Le cifre scorrono in continuo
   // lungo tutto il viaggio nella nebulosa e l'etichetta cambia una volta sola,
@@ -253,10 +280,47 @@ export default function App() {
   // frame farebbe un render di React a ogni frame dello scroll, e qui il valore
   // cambia a ogni pixel.
   const telemetryLineRef = useRef<HTMLSpanElement>(null);
-  useMotionValueEvent(telemetryMix, 'change', (mix) => {
+  // Si ascolta `scrollY` e non `telemetryMix`: quest'ultimo satura a 1 e non
+  // emette piu' nulla, quindi un change su di lui non arriverebbe nella Works,
+  // dove l'etichetta deve cambiare. Ascoltando la posizione, ogni sezione
+  // riceve la sua riga esattamente quando il suo bordo supera quello della
+  // precedente — la stessa condizione di `stageIndexAt`, e quindi le due non
+  // possono separarsi.
+  useMotionValueEvent(scrollY, 'change', (value) => {
     const node = telemetryLineRef.current;
     if (!node) return;
-    const m = clamp01(mix);
+    const m = clamp01(telemetryMix.get());
+    // L'etichetta dipende dalla SEZIONE, non dal numero: sono due domande
+    // diverse. Coordinate scorrenti dentro la nebulosa, indirizzo quando la
+    // pagina parla di una persona, rotta quando parla del metodo, e la Terra —
+    // il punto di arrivo dello zoom — quando la pagina torna a mostrare i
+    // lavori. I confronti vanno dal fondo alla testa, come in `stageIndexAt`.
+    // I confronti vanno dal fondo alla testa, come in `stageIndexAt`. Ogni
+    // sezione deve comparire: una sezione senza ramo non mostrerebbe un'etichetta
+    // sua, ma l'ultima che l'ha preceduta — ed e' cosi' che «Costruiamo» mostrava
+    // la rotta del metodo per tutta la sua permanenza in schermo.
+    const contact = document.querySelector<HTMLElement>('[data-scene="contact"]');
+    if (contact && value >= contact.offsetTop) {
+      node.textContent = `[${CONTACT_LABEL}]`;
+      return;
+    }
+    const method = document.querySelector<HTMLElement>('[data-scene="method"]');
+    if (method && value >= method.offsetTop) {
+      node.textContent = COORD_ROTTA;
+      return;
+    }
+    const about = document.querySelector<HTMLElement>('[data-scene="about"]');
+    if (about && value >= about.offsetTop) {
+      const works = document.querySelector<HTMLElement>('[data-scene="works"]');
+      // Fra «Chi Sono» e «Il Mio Metodo» c'è la Works: lì la posizione torna a
+      // essere un punto sul pianeta, ed è la Terra — lo zero dello zoom, che è
+      // anche la coordinata da cui era partito. Senza questo ramo la Works
+      // mostrerebbe l'indirizzo di Potenza per tutta la sua corsa.
+      node.textContent = works && value >= works.offsetTop
+        ? `[${EARTH_LABEL} - ${EARTH_RA.toFixed(4)}, ${EARTH_DEC.toFixed(4)}]`
+        : COORD_BASE_OPERATIVA;
+      return;
+    }
     const a = lerp(GALAXY_RA, EARTH_RA, m);
     const b = lerp(GALAXY_DEC, EARTH_DEC, m);
     const label = m < 0.5 ? GALAXY_LABEL : EARTH_LABEL;
@@ -329,6 +393,25 @@ export default function App() {
           <NebulaScene scrollY={scrollY} />
         </section>
 
+        {/* CHI SONO: la sezione che spiega chi c'è prima di mostrare i lavori.
+            Vive fra la dissolvenza e la Works perche' e' l'ordine in cui si
+            legge: prima la persona, poi le cose che ha fatto.
+
+            `min-h-screen` e non `h-screen`: sotto `md` le due colonne si
+            impilano e il contenuto supera una viewport, e una sezione fissa
+            taglierebbe la scheda missione. La Works, che invece ha una timeline
+            calcolata in px, continua a dichiarare la propria altezza.
+
+            Nessun marker `data-snap`: la sezione aggancia dal proprio bordo
+            superiore, che è il comportamento di default in SmoothScrollProvider
+            per le sezioni che non hanno un marker. */}
+        <section
+          data-scene="about"
+          className="relative z-10 min-h-screen w-full overflow-hidden bg-transparent pt-24"
+        >
+          <AboutScene scrollY={scrollY} />
+        </section>
+
         {/* La Works contiene quattro fasi consecutive: la NASCITA (lo strip
             e' fermo a birthOffset e la card 1 arriva da sola al centro), la
             CORSA (lo strip avanza di uno step per ogni card che atterra, a
@@ -365,6 +448,18 @@ export default function App() {
             onOpenProject={handleOpenProject}
             scrollY={scrollY}
           />
+        </section>
+
+        {/* IL MIO METODO: fra la Works e Let's Build, che è dove sta la
+            promessa ("quattro tappe") e la sua prova (la sezione che la
+            realizza). Anche qui nessun marker: la sezione aggancia dal bordo
+            superiore, e il tracciato del razzo è governato dal suo proprio
+            scroll, non da uno stop. */}
+        <section
+          data-scene="method"
+          className="relative z-10 min-h-screen w-full overflow-hidden bg-transparent pt-24"
+        >
+          <MethodScene scrollY={scrollY} />
         </section>
 
         <section
@@ -431,6 +526,12 @@ export default function App() {
           onClose={handleCloseAddProject}
         />
       )}
+
+      {/* IL RETICOLO. Ultimo figlio della pagina, e non per caso: il suo `z` e'
+          il piu' alto e il suo `pointer-events` e' `none`, quindi non disturba
+          nessuno — ma resta un fatto dichiarato: se un overlay futuro volesse
+          passargli sopra, deve sapere che il reticolo e' li e non altrove. */}
+      <ReticleCursor />
     </div>
   );
 }

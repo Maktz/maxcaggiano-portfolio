@@ -44,9 +44,27 @@ export const readPortraitGeometry = (): PortraitGeometry | null => geometry;
 // dalla Works quando scrive la propria altezza in px).
 let sceneTopsCache: { viewport: string; tops: Map<string, number> } | null = null;
 
+/**
+ * Contatore di invalidazione della cache.
+ *
+ * Chi misura qualcosa di legato al LAYOUT delle sezioni (per esempio le
+ * altezze, in scrollScene.ts) non può usare la propria cache con la sola chiave
+ * della viewport: la Works scrive la propria altezza in px dopo il primo paint
+ * senza che la viewport sia cambiata, e una cache keyed solo da quella chiave
+ * continuerebbe a restituire l'altezza del fallback per tutta la sessione.
+ * Il controvalore è quindi pubblicato qui, e la cache di chi lo legge lo mette
+ * dentro la propria chiave: un solo numero invalida tutte le misure che
+ * dipendono dalla stessa impaginazione.
+ */
+let sceneTopsVersion = 0;
+
+/** Cambia a ogni `invalidateSceneTops`: da usare come chiave di cache. */
+export const readSceneTopsVersion = () => sceneTopsVersion;
+
 /** Da chiamare dopo che una sezione ha cambiato altezza: la cache offsets e' nulla. */
 export const invalidateSceneTops = () => {
   sceneTopsCache = null;
+  sceneTopsVersion += 1;
 };
 
 /**

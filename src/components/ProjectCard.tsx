@@ -1,6 +1,7 @@
 import type { Project } from '@/data/projects';
 import { ArrowUpRight } from 'lucide-react';
 import KineticText from './KineticText';
+import { reactAvatar } from '@/lib/avatarReactions';
 
 interface ProjectCardProps {
   project: Project;
@@ -14,8 +15,30 @@ interface ProjectCardProps {
 export default function ProjectCard({ project, onOpen }: ProjectCardProps) {
   return (
     <div
-      className="grid-wireframe bg-dark-green p-4 md:p-5 flex flex-col gap-2.5 cursor-pointer hover:bg-dark-green transition-colors h-full overflow-hidden"
-      onClick={onOpen}
+      // `data-reticle-label`: la micro-label del cursore su questa card. Vive
+      // qui e non in un foglio di stile perche' e' contenuto, non stile — e il
+      // reticolo la legge con `closest`, quindi dichiararla sull'elemento che
+      // si clicca e' l'unico modo che resti vero anche se la card cambia
+      // aspetto. `[ESPLORA]` e non `[VAI]`: la card non porta da nessuna
+      // parte, apre il case study, ed e' quello che il testo dice gia' in
+      // fondo.
+      data-reticle-label="ESPLORA"
+      // Le STELLINE stanno sul click della card intera, non solo sul bottone in
+      // fondo: la card e' cliccabile per tutta la sua superficie, e reagire solo
+      // al bottone direbbe che il resto non e' un bersaglio mentre lo e'. Il
+      // bottone chiama `onOpen` e ferma la propagazione, quindi senza questa
+      // riga reagirebbe due volte — e con la regola del timer, due volte vuol
+      // dire un allungamento invece di una reazione sola.
+      onClick={() => {
+        reactAvatar('stars');
+        onOpen();
+      }}
+      // `works-card`: la stessa regola che accende le stazioni del metodo, qui
+      // applicata a `is-lit` quando la card atterra al suo slot (vedi
+      // `ProjectsScene`). Il bordo parte da `grid-wireframe` come tutte le
+      // card chiuse e diventa giallo quando è arrivata — stesso gesto del razzo
+      // che raggiunge una tappa, non un colore nuovo.
+      className="works-card grid-wireframe bg-dark-green p-4 md:p-5 flex flex-col gap-2.5 cursor-pointer hover:bg-dark-green transition-colors h-full overflow-hidden"
     >
       <div className="flex items-center justify-between gap-2 font-mono text-[9px] tracking-widest text-swiss-pink shrink-0">
         <span>[{project.code}]</span>
@@ -62,8 +85,16 @@ export default function ProjectCard({ project, onOpen }: ProjectCardProps) {
         {project.brief}
       </p>
 
+      {/* `stopPropagation` ferma l'evento prima che arrivi alla card, e quindi
+          anche la sua reazione: il click sul bottone non deve far reagire il
+          viso due volte. Lo stesso gesto arriva al bus una volta sola, dal
+          bottone. */}
       <button
-        onClick={(e) => { e.stopPropagation(); onOpen(); }}
+        onClick={(e) => {
+          e.stopPropagation();
+          reactAvatar('stars');
+          onOpen();
+        }}
         className="group/btn flex items-center gap-1 font-mono text-[10px] tracking-widest text-swiss-pink transition-colors self-start shrink-0"
       >
         [ESPLORA IL CASO
